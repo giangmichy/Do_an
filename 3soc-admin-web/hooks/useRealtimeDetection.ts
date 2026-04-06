@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-const MAX_RESULT_ENTRIES = 500;
+const MAX_RESULT_ENTRIES = 2000;
 
 export interface BoundingBox {
   x: number;
@@ -29,15 +29,8 @@ export function useRealtimeDetection({
 
     setDetectionResults((prev) => {
       const next = new Map(prev);
-      const incomingBoxes = boxes || [];
-      const existingBoxes = next.get(timestamp) || [];
 
-      // If backend returns empty boxes for the same frame, keep the last non-empty result.
-      if (incomingBoxes.length === 0 && existingBoxes.length > 0) {
-        return prev;
-      }
-
-      next.set(timestamp, incomingBoxes);
+      next.set(timestamp, boxes || []);
 
       if (next.size > MAX_RESULT_ENTRIES) {
         const oldestTimestamp = next.keys().next().value as number | undefined;

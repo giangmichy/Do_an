@@ -131,16 +131,30 @@ export class ApiClient {
   }
 
   private getHeaders(): HeadersInit {
+    // Đọc token mỗi lần gọi để tránh stale token khi khởi tạo server-side
+    const token = this.token || (typeof window !== 'undefined' ? localStorage.getItem('access_token') : null);
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     };
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
   }
 
+  getToken(): string | null {
+    return this.token || (typeof window !== 'undefined' ? localStorage.getItem('access_token') : null);
+  }
+
   // User Management
+  async getMe(): Promise<User> {
+    const response = await fetch(`${this.baseUrl}/users/me`, {
+      headers: this.getHeaders(),
+    });
+    if (!response.ok) throw new Error('Failed to fetch current user');
+    return response.json();
+  }
+
   async register(data: UserCreate): Promise<User> {
     const response = await fetch(`${this.baseUrl}/users/register`, {
       method: 'POST',
@@ -226,9 +240,10 @@ export class ApiClient {
       formData.append('video_id', videoId);
     }
 
+    const token = this.getToken();
     const headers: HeadersInit = {};
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
 
     const response = await fetch(`${this.baseUrl}/files/upload`, {
@@ -313,11 +328,11 @@ export class ApiClient {
     const formData = new FormData();
     formData.append('file', file);
 
+    const token = this.getToken();
     const headers: HeadersInit = {};
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
-    // Không set Content-Type với FormData - để browser tự set
 
     const response = await fetch(`${this.baseUrl}/files/detect-image`, {
       method: 'POST',

@@ -1,156 +1,239 @@
 'use client';
 
-import React, {useEffect, useRef, useCallback} from 'react';
-import type {BoundingBox} from '@/lib/WebSocketClient';
+import React, { useEffect, useRef, useCallback } from 'react';
+import type { BoundingBox } from '@/hooks/useRealtimeDetection';
+
+// Khoảng thời gian chấp nhận bbox trước/sau currentTime
+const STALE_AFTER_MS       = 80;  // giữ box tối đa 80ms SAU detection timestamp
+const STALE_BEFORE_MS      = 20;  // chấp nhận box đến SỚM hơn 20ms
+const EMPTY_FRAME_THRESHOLD = 2;  // cần N frame liên tiếp rỗng mới xóa box
+
+const MODEL_COLORS: Record<string, string> = {
+    co3soc:      '#FF0000',
+    duongluoibo: '#00FF00',
+    vnmap:       '#0000FF',
+};
+
+const LABEL_VI: Record<string, string> = {
+    co3soc:      'Cờ 3 sọc',
+    duongluoibo: 'Đường lưỡi bò',
+    vnmap:       'VN',
+};
 
 interface CanvasOverlayProps {
-    videoElement: HTMLVideoElement | null;
-    boxes: BoundingBox[];
+    videoRef: React.RefObject<HTMLVideoElement | null>;
+    detectionResults: Map<number, BoundingBox[]>;
+    enabled: boolean;
 }
 
 export const CanvasOverlay = React.memo(function CanvasOverlay({
-                                                                   videoElement,
-                                                                   boxes
-                                                               }: CanvasOverlayProps) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const animationFrameRef = useRef<number>(0);
-    const videoSizeRef = useRef({width: 0, height: 0});
+    videoRef,
+    detectionResults,
+    enabled,
+}: CanvasOverlayProps) {
+    const canvasRef    = useRef<HTMLCanvasElement>(null);
+    const rafRef       = useRef<number>(0);
+    const detectionRef = useRef<Map<number, BoundingBox[]>>(detectionResults);
+    const sortedTsRef  = useRef<number[]>([]);
+    const lastBoxesRef      = useRef<BoundingBox[]>([]); // giữ box cuối, tránh flash trắng
+    const emptyFrameCountRef = useRef<number>(0);        // đếm frame liên tiếp không có vi phạm
 
-    const drawBoxes = useCallback((ctx: CanvasRenderingContext2D, boxesToDraw: BoundingBox[]) => {
-        const canvas = canvasRef.current;
-        if (!canvas || !videoElement) return;
+    // Sync detectionResults vào ref (không trigger re-render)
+    useEffect(() => {
+        detectionRef.current = detectionResults;
+        sortedTsRef.current  = Array.from(detectionResults.keys()).sort((a, b) => a - b);
+    }, [detectionResults]);
 
-        const modelColors: Record<string, string> = {
-            co3soc: '#FF0000',
-            duongluoibo: '#00FF00',
-            vnmap: '#0000FF'
-        };
+    // Tìm boxes phù hợp với thời điểm hiện tại của video
+    const findBoxes = useCallback((currentMs: number): BoundingBox[] => {
+        const timestamps = sortedTsRef.current;
+        if (timestamps.length === 0) return lastBoxesRef.current;
 
-        // Clear canvas completely with transparent background
+        // Binary search: tìm vị trí chèn của currentMs
+        let lo = 0;
+        let hi = timestamps.length - 1;
+        let insertIdx = timestamps.length;
+
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (timestamps[mid] <= currentMs) {
+                lo = mid + 1;
+            } else {
+                insertIdx = mid;
+                hi = mid - 1;
+            }
+        }
+
+        // timestamps[insertIdx - 1] = timestamp lớn nhất <= currentMs (frame vừa qua)
+        // timestamps[insertIdx]     = timestamp nhỏ nhất > currentMs  (frame sắp tới)
+        const prevIdx = insertIdx - 1;
+        const nextIdx = insertIdx;
+
+        // Kiểm tra frame vừa qua
+        if (prevIdx >= 0) {
+            const prevTs   = timestamps[prevIdx];
+            const diffPrev = currentMs - prevTs; // dương = đã qua
+
+            if (diffPrev <= STALE_AFTER_MS) {
+                const boxes = detectionRef.current.get(prevTs) || [];
+                if (boxes.length > 0) {
+                    emptyFrameCountRef.current = 0;
+                    lastBoxesRef.current = boxes;
+                    return boxes;
+                } else {
+                    // Frame rỗng — cần N frame liên tiếp mới xóa box
+                    emptyFrameCountRef.current += 1;
+                    if (emptyFrameCountRef.current >= EMPTY_FRAME_THRESHOLD) {
+                        lastBoxesRef.current = [];
+                        return [];
+                    }
+                    return lastBoxesRef.current;
+                }
+            }
+        }
+
+        // Nhìn trước frame sắp tới (compensate render latency)
+        if (nextIdx < timestamps.length) {
+            const nextTs   = timestamps[nextIdx];
+            const diffNext = nextTs - currentMs; // dương = chưa tới
+
+            if (diffNext <= STALE_BEFORE_MS) {
+                const boxes = detectionRef.current.get(nextTs) || [];
+                if (boxes.length > 0) {
+                    emptyFrameCountRef.current = 0;
+                    lastBoxesRef.current = boxes;
+                    return boxes;
+                }
+            }
+        }
+
+        // Không có frame nào trong khoảng → giữ box cuối (tránh flash trắng)
+        return lastBoxesRef.current;
+    }, []);
+
+    // Vẽ boxes lên canvas
+    const draw = useCallback((
+        ctx: CanvasRenderingContext2D,
+        canvas: HTMLCanvasElement,
+        video: HTMLVideoElement,
+        boxes: BoundingBox[],
+    ) => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (boxes.length === 0) return;
 
-        // Only draw if we have boxes
-        if (!boxesToDraw || boxesToDraw.length === 0) {
+        const vw = video.videoWidth  || canvas.width;
+        const vh = video.videoHeight || canvas.height;
+        const videoAspect  = vw / vh;
+        const canvasAspect = canvas.width / canvas.height;
+
+        let rw: number, rh: number, ox: number, oy: number;
+        if (videoAspect > canvasAspect) {
+            rw = canvas.width;
+            rh = canvas.width / videoAspect;
+            ox = 0;
+            oy = (canvas.height - rh) / 2;
+        } else {
+            rh = canvas.height;
+            rw = canvas.height * videoAspect;
+            ox = (canvas.width - rw) / 2;
+            oy = 0;
+        }
+
+        const scaleX = rw / vw;
+        const scaleY = rh / vh;
+
+        boxes.forEach(box => {
+            const x = box.x * scaleX + ox;
+            const y = box.y * scaleY + oy;
+            const w = box.width  * scaleX;
+            const h = box.height * scaleY;
+
+            const color    = MODEL_COLORS[box.label] || '#FFFF00';
+            const labelVi  = LABEL_VI[box.label] || box.label;
+            const scorePct = box.confidence <= 1
+                ? (box.confidence * 100).toFixed(0)
+                : box.confidence.toFixed(0);
+            const labelText = `${labelVi} ${scorePct}%`;
+
+            // Vẽ khung
+            ctx.strokeStyle = color;
+            ctx.lineWidth   = 3;
+            ctx.strokeRect(x, y, w, h);
+
+            // Vẽ nền label
+            ctx.font = 'bold 13px Arial';
+            const tw = ctx.measureText(labelText).width + 10;
+            const th = 20;
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y - th - 2, tw, th + 2);
+
+            // Vẽ chữ label
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText(labelText, x + 5, y - 5);
+        });
+    }, []);
+
+    // RAF loop chính — đọc video.currentTime trực tiếp, không qua React state
+    useEffect(() => {
+        if (!enabled) {
+            cancelAnimationFrame(rafRef.current);
+            emptyFrameCountRef.current = 0;
+            lastBoxesRef.current = [];
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const ctx = canvas.getContext('2d');
+                ctx?.clearRect(0, 0, canvas.width, canvas.height);
+            }
             return;
         }
 
-        // Get video actual dimensions
-        const videoWidth = videoElement.videoWidth || videoSizeRef.current.width;
-        const videoHeight = videoElement.videoHeight || videoSizeRef.current.height;
+        const loop = () => {
+            rafRef.current = requestAnimationFrame(loop);
 
-        // Calculate video rendered size (accounting for object-contain letterboxing)
-        const videoAspect = videoWidth / videoHeight;
-        const canvasAspect = canvas.width / canvas.height;
+            const video  = videoRef.current;
+            const canvas = canvasRef.current;
+            if (!video || !canvas) return;
 
-        let renderedWidth, renderedHeight, offsetX, offsetY;
-
-        if (videoAspect > canvasAspect) {
-            // Video wider than canvas - letterbox top/bottom
-            renderedWidth = canvas.width;
-            renderedHeight = canvas.width / videoAspect;
-            offsetX = 0;
-            offsetY = (canvas.height - renderedHeight) / 2;
-        } else {
-            // Video taller than canvas - letterbox left/right
-            renderedHeight = canvas.height;
-            renderedWidth = canvas.height * videoAspect;
-            offsetX = (canvas.width - renderedWidth) / 2;
-            offsetY = 0;
-        }
-
-        // Calculate scale factors based on rendered size
-        const scaleX = renderedWidth / videoWidth;
-        const scaleY = renderedHeight / videoHeight;
-
-        // Draw bounding boxes with scaling and offset
-        boxesToDraw.forEach(box => {
-            const scaledX = box.x * scaleX + offsetX;
-            const scaledY = box.y * scaleY + offsetY;
-            const scaledWidth = box.width * scaleX;
-            const scaledHeight = box.height * scaleY;
-
-            const boxColor = modelColors[box.label] || '#00ff00';
-
-            // Draw rectangle
-            ctx.strokeStyle = boxColor;
-            ctx.lineWidth = 2;
-            ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
-
-            // Draw label background
-            ctx.fillStyle = boxColor;
-            const text = `${box.label} ${box.confidence.toFixed(1)}%`;
-            const textMetrics = ctx.measureText(text);
-            const textHeight = 16;
-            ctx.fillRect(scaledX, scaledY - textHeight - 4, textMetrics.width + 8, textHeight + 4);
-
-            // Draw label text
-            ctx.fillStyle = '#000000';
-            ctx.font = 'bold 12px Arial';
-            ctx.fillText(text, scaledX + 4, scaledY - 6);
-        });
-    }, [videoElement]);
-
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || !videoElement) return;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        // Draw exactly what parent selected (currentBoxes in page.tsx).
-        animationFrameRef.current = requestAnimationFrame(() => {
-            drawBoxes(ctx, boxes || []);
-        });
-
-        return () => {
-            if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current);
-            }
-        };
-    }, [videoElement, boxes, drawBoxes]);
-
-    // Handle canvas resizing to match video
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || !videoElement) return;
-
-        const handleResize = () => {
-            // Store actual video dimensions for scaling calculation
-            const videoWidth = videoElement.videoWidth;
-            const videoHeight = videoElement.videoHeight;
-
-            if (videoWidth && videoHeight) {
-                videoSizeRef.current = {width: videoWidth, height: videoHeight};
+            // Sync kích thước canvas với video element
+            if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
+                canvas.width  = video.clientWidth;
+                canvas.height = video.clientHeight;
             }
 
-            // Set canvas display size to match video element's display size
-            const displayWidth = videoElement.clientWidth;
-            const displayHeight = videoElement.clientHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
 
-            canvas.width = displayWidth;
-            canvas.height = displayHeight;
+            const currentMs = video.currentTime * 1000;
+            const boxes     = findBoxes(currentMs);
+            draw(ctx, canvas, video, boxes);
         };
 
-        // Initial resize
-        const timer = setTimeout(handleResize, 100);
+        rafRef.current = requestAnimationFrame(loop);
+        return () => cancelAnimationFrame(rafRef.current);
+    }, [enabled, videoRef, findBoxes, draw]);
 
-        window.addEventListener('resize', handleResize);
-        videoElement.addEventListener('loadedmetadata', handleResize);
-        videoElement.addEventListener('play', handleResize);
+    // ResizeObserver để canvas luôn khớp video
+    useEffect(() => {
+        const video  = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas) return;
 
-        return () => {
-            clearTimeout(timer);
-            window.removeEventListener('resize', handleResize);
-            videoElement.removeEventListener('loadedmetadata', handleResize);
-            videoElement.removeEventListener('play', handleResize);
-        };
-    }, [videoElement]);
+        const ro = new ResizeObserver(() => {
+            canvas.width  = video.clientWidth;
+            canvas.height = video.clientHeight;
+        });
+        ro.observe(video);
+
+        canvas.width  = video.clientWidth;
+        canvas.height = video.clientHeight;
+
+        return () => ro.disconnect();
+    }, [videoRef]);
 
     return (
         <canvas
             ref={canvasRef}
-            className="absolute top-0 left-0 w-full h-full"
-            style={{cursor: 'crosshair'}}
+            className="absolute top-0 left-0 w-full h-full pointer-events-none"
         />
     );
 });

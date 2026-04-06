@@ -5,7 +5,7 @@ import {Button} from '@/components/ui/button';
 import {CanvasOverlay} from '@/components/CanvasOverlay';
 import {apiClient} from '@/app/api';
 import {drawBoundingBoxes} from '@/lib/imageUtils';
-import {Activity, Play, Pause, Upload, Scan, Image as ImageIcon, Video as VideoIcon} from 'lucide-react';
+import {Play, Pause, Upload, Scan, Image as ImageIcon, Video as VideoIcon} from 'lucide-react';
 import {BoundingBox, useRealtimeDetection} from '@/hooks/useRealtimeDetection';
 import {useViolationSSE} from '@/hooks/useViolationSSE';
 
@@ -18,27 +18,28 @@ type ViolationFrame = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
 const BACKEND_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
-const TIMESTAMP_UPDATE_INTERVAL_MS = 50;
-const BOX_STALE_MS = 500;
 
 export default function Home() {
-    // --- STATE QUẢN LÝ ---
+    // --- STATE ---
     const [isProcessing, setIsProcessing] = useState(false);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [bboxImageUrl, setBboxImageUrl] = useState<string | null>(null);
     const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
-    const [isDetecting, setIsDetecting] = useState(true);
-    const [videoId, setVideoId] = useState<string>("");
-
-    // --- STATE VIDEO ---
-    const videoRef = useRef<HTMLVideoElement>(null);
-    const previewUrlRef = useRef<string | null>(null);
+    const [isDetecting, setIsDetecting] = useState(false);
+    const [videoId, setVideoId] = useState<string>('');
+    const [uploadDone, setUploadDone] = useState(false);
+    const [scanReady, setScanReady] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [currentTimestamp, setCurrentTimestamp] = useState(0);
     const [videoDuration, setVideoDuration] = useState(0);
-    const lastTimestampUpdateRef = useRef(0);
 
+    // --- REFS ---
+    const videoRef      = useRef<HTMLVideoElement>(null);
+    const previewUrlRef = useRef<string | null>(null);
+    const seekRef       = useRef<HTMLInputElement>(null);
+    const previewUrlForDetectRef = useRef<string | null>(null);
+
+    // --- DETECTION HOOKS ---
     const {
         detectionResults,
         appendDetectionResult,
@@ -54,31 +55,46 @@ export default function Home() {
         (violation: ViolationFrame) => {
             appendDetectionResult(violation.timestamp, violation.detections || []);
         },
-        [appendDetectionResult]
+        [appendDetectionResult],
     );
 
-    const {violationFrames, resetViolations} = useViolationSSE({
+    const {violationFrames, resetViolations, scanProgress, scanDone} = useViolationSSE({
         videoId,
-        enabled: mediaType === 'video' && !!videoId && isDetecting,
+        enabled: mediaType === 'video' && !!videoId && uploadDone,
         onViolation: handleViolation,
     });
 
+    // --- RESET ---
     const resetDetectionState = useCallback(() => {
         resetDetections();
         resetViolations();
-        setCurrentTimestamp(0);
         setVideoDuration(0);
     }, [resetDetections, resetViolations]);
 
+    // Mở khóa nút khi quét xong
+    useEffect(() => {
+        if (scanDone) setScanReady(true);
+    }, [scanDone]);
+
+    // Cleanup object URL khi unmount
     useEffect(() => {
         return () => {
-            if (previewUrlRef.current) {
-                URL.revokeObjectURL(previewUrlRef.current);
-            }
+            if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
         };
     }, []);
 
-    // 3. Phát hiện ảnh
+    // Sync thanh seek theo video (không trigger re-render)
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        const onTimeUpdate = () => {
+            if (seekRef.current) seekRef.current.value = String(video.currentTime * 1000);
+        };
+        video.addEventListener('timeupdate', onTimeUpdate);
+        return () => video.removeEventListener('timeupdate', onTimeUpdate);
+    }, []);
+
+    // --- IMAGE DETECTION ---
     const detectImage = useCallback(async (file: File) => {
         setIsProcessing(true);
         setBboxImageUrl(null);
@@ -86,9 +102,9 @@ export default function Home() {
             const result = await apiClient.detectImage(file);
             if (result.detections && result.detections.length > 0) {
                 setSingleDetection(0, result.detections);
-                // Vẽ bounding boxes lên ảnh
-                if (previewUrl) {
-                    const imageWithBoxes = await drawBoundingBoxes(previewUrl, result.detections);
+                const currentPreviewUrl = previewUrlForDetectRef.current;
+                if (currentPreviewUrl) {
+                    const imageWithBoxes = await drawBoundingBoxes(currentPreviewUrl, result.detections);
                     setBboxImageUrl(imageWithBoxes);
                 }
             }
@@ -97,21 +113,23 @@ export default function Home() {
         } finally {
             setIsProcessing(false);
         }
-    }, [previewUrl]);
+    }, [setSingleDetection]);
 
-    // 4. Xử lý File Upload
+    // --- FILE UPLOAD ---
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        // Stop current detection pipeline immediately when selecting a new file.
+        // Dừng pipeline cũ
         if (videoRef.current) {
             videoRef.current.pause();
             videoRef.current.currentTime = 0;
         }
         setIsPlaying(false);
         setIsDetecting(false);
-        setVideoId("");
+        setVideoId('');
+        setUploadDone(false);
+        setScanReady(false);
 
         if (previewUrlRef.current) {
             URL.revokeObjectURL(previewUrlRef.current);
@@ -123,104 +141,54 @@ export default function Home() {
 
         setSelectedFile(file);
         setPreviewUrl(url);
+        previewUrlForDetectRef.current = url;
         setBboxImageUrl(null);
         resetDetectionState();
 
         const type = file.type.startsWith('image/') ? 'image' : 'video';
         setMediaType(type);
-        if (type === 'image') {
-            setIsDetecting(true);
-        }
+        if (type === 'image') setIsDetecting(true);
+        if (type === 'video' && videoRef.current) videoRef.current.src = url;
 
-        if (type === 'video' && videoRef.current) {
-            videoRef.current.src = url;
-        }
-        const videoId = type === 'video' ? Date.now().toString() : "";
-        setVideoId(videoId);
+        const newVideoId = type === 'video' ? Date.now().toString() : '';
+        // Không set videoId ngay — chờ upload xong mới bật SSE
 
         try {
-            await apiClient.uploadFile(file, videoId);
+            await apiClient.uploadFile(file, newVideoId);
+            // Upload xong → set videoId để SSE tự mở
+            setVideoId(newVideoId);
+            setUploadDone(true);
         } catch (error) {
             console.error('File upload error:', error);
         }
     };
 
-
-    // 5. Đồng bộ hóa mượt mà cho Canvas
-    //
-
-    useEffect(() => {
-        let frameId: number;
-        const sync = () => {
-            if (videoRef.current && !videoRef.current.paused) {
-                const nowTs = videoRef.current.currentTime * 1000;
-                if (Math.abs(nowTs - lastTimestampUpdateRef.current) >= TIMESTAMP_UPDATE_INTERVAL_MS) {
-                    lastTimestampUpdateRef.current = nowTs;
-                    setCurrentTimestamp(nowTs);
-                }
-                frameId = requestAnimationFrame(sync);
-            }
-        };
-        if (isPlaying) frameId = requestAnimationFrame(sync);
-        return () => cancelAnimationFrame(frameId);
-    }, [isPlaying]);
-
-    // 5. Tổng hợp dữ liệu hiển thị (Memoized để tránh lag)
+    // --- DETECTION FRAMES LIST (chỉ dùng cho ảnh) ---
     const detectionFramesList = useMemo(() => {
         return Array.from(detectionResults.entries())
-            .filter(([_, boxes]) => boxes.length > 0)
+            .filter(([, boxes]) => boxes.length > 0)
             .map(([ts, boxes]) => ({ts, count: boxes.length}));
     }, [detectionResults]);
-
-    const sortedDetectionTimestamps = useMemo(
-        () => Array.from(detectionResults.keys()).sort((a, b) => a - b),
-        [detectionResults]
-    );
-
-    const currentBoxes = useMemo(() => {
-        const timestamps = sortedDetectionTimestamps;
-        if (timestamps.length === 0) return [];
-
-        // Tìm detection timestamp lớn nhất mà <= currentTimestamp
-        for (let i = timestamps.length - 1; i >= 0; i--) {
-            const ts = timestamps[i];
-            if (ts > currentTimestamp) continue;
-            if (currentTimestamp - ts > BOX_STALE_MS) break;
-            const boxes = detectionResults.get(ts) || [];
-            if (boxes.length > 0) return boxes;
-        }
-
-        return [];
-    }, [currentTimestamp, detectionResults, sortedDetectionTimestamps]);
 
     return (
         <div className="min-h-screen bg-slate-50 p-6">
             <div className="max-w-7xl mx-auto space-y-6">
-                {/* Header
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-primary rounded-lg">
-                        <Activity className="text-white" size={24}/>
-                    </div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-800">AI Detection System</h1>
-                </div> */}
 
-                {/* Main Grid: Left Control - Right Video */}
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
 
                     {/* Cột trái: Upload & Detect */}
                     <div className="lg:col-span-1 space-y-6">
                         <Card className="shadow-sm">
-                            <CardHeader><CardTitle className="text-sm font-semibold">Cài đặt phân
-                                tích</CardTitle></CardHeader>
+                            <CardHeader>
+                                <CardTitle className="text-sm font-semibold">Cài đặt phân tích</CardTitle>
+                            </CardHeader>
                             <CardContent className="space-y-4">
-                                <label
-                                    className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer hover:bg-slate-100 transition-colors border-slate-200">
+                                <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer hover:bg-slate-100 transition-colors border-slate-200">
                                     <div className="flex flex-col items-center justify-center pt-5 pb-6">
                                         <Upload className="w-8 h-8 mb-3 text-slate-400"/>
                                         <p className="text-xs text-slate-500 font-medium">Click để tải lên tệp</p>
                                     </div>
-                                    <input type="file" className="hidden" accept="image/*,video/*"
-                                           onChange={handleFileChange}/>
+                                    <input type="file" className="hidden" accept="image/*,video/*" onChange={handleFileChange}/>
                                 </label>
 
                                 {selectedFile && (
@@ -232,20 +200,53 @@ export default function Home() {
 
                                 <Button
                                     className="w-full h-11"
-                                    disabled={!selectedFile || isProcessing}
+                                    disabled={
+                                        !selectedFile ||
+                                        isProcessing ||
+                                        (mediaType === 'video' && !scanReady)
+                                    }
                                     onClick={() => {
                                         if (mediaType === 'image' && selectedFile) {
                                             detectImage(selectedFile);
                                         } else if (mediaType === 'video') {
-                                            setIsDetecting((prev) => !prev);
+                                            const next = !isDetecting;
+                                            setIsDetecting(next);
+                                            if (next) {
+                                                videoRef.current?.play();
+                                            } else {
+                                                videoRef.current?.pause();
+                                            }
                                         }
                                     }}
                                 >
                                     <Scan size={18} className={`mr-2 ${isProcessing ? 'animate-spin' : ''}`}/>
                                     {mediaType === 'video'
-                                        ? (isDetecting ? 'Tạm dừng phát hiện' : 'Bật phát hiện')
+                                        ? (isDetecting ? 'Tạm dừng' : 'Xem phát hiện')
                                         : (isProcessing ? 'Đang phân tích...' : 'Bắt đầu phát hiện')}
                                 </Button>
+
+                                {mediaType === 'video' && videoId && (
+                                    <div className="mt-2">
+                                        {!scanDone ? (
+                                            <div>
+                                                <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                    <span>Đang xử lý video...</span>
+                                                    <span>{scanProgress}%</span>
+                                                </div>
+                                                <div className="w-full bg-slate-100 rounded-full h-1.5">
+                                                    <div
+                                                        className="bg-primary h-1.5 rounded-full transition-all duration-300"
+                                                        style={{width: `${scanProgress}%`}}
+                                                    />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-green-600 font-medium text-center">
+                                                ✓ Sẵn sàng — Bấm &quot;Xem phát hiện&quot; để bắt đầu
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
                     </div>
@@ -258,14 +259,16 @@ export default function Home() {
                                     <>
                                         {mediaType === 'video' ? (
                                             <video
-                                                ref={videoRef} src={previewUrl} className="w-full h-full object-contain"
+                                                ref={videoRef}
+                                                src={previewUrl}
+                                                className="w-full h-full object-contain"
                                                 crossOrigin="anonymous"
-                                                onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)}
+                                                onPlay={() => setIsPlaying(true)}
+                                                onPause={() => setIsPlaying(false)}
                                                 onLoadedMetadata={(e) => setVideoDuration(e.currentTarget.duration * 1000)}
                                             />
                                         ) : (
-                                            <div
-                                                className="relative w-full h-full flex items-center justify-center bg-black">
+                                            <div className="relative w-full h-full flex items-center justify-center bg-black">
                                                 <img
                                                     src={bboxImageUrl || previewUrl}
                                                     className="max-w-full max-h-full object-contain"
@@ -274,10 +277,12 @@ export default function Home() {
                                             </div>
                                         )}
 
-                                        {isDetecting && (
+                                        {/* CanvasOverlay: tự đọc video.currentTime qua RAF, không qua React state */}
+                                        {mediaType === 'video' && (
                                             <CanvasOverlay
-                                                videoElement={videoRef.current}
-                                                boxes={currentBoxes}
+                                                videoRef={videoRef}
+                                                detectionResults={detectionResults}
+                                                enabled={isDetecting}
                                             />
                                         )}
                                     </>
@@ -291,24 +296,31 @@ export default function Home() {
 
                             {mediaType === 'video' && (
                                 <div className="p-4 bg-white border-t space-y-3">
+                                    {/* Thanh seek — uncontrolled, cập nhật qua timeupdate event */}
                                     <input
-                                        type="range" min="0" max={videoDuration} value={currentTimestamp}
+                                        type="range"
+                                        min="0"
+                                        max={videoDuration}
+                                        defaultValue={0}
+                                        ref={seekRef}
                                         className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-primary"
                                         onChange={(e) => {
                                             const val = Number(e.target.value);
                                             if (videoRef.current) videoRef.current.currentTime = val / 1000;
-                                            setCurrentTimestamp(val);
                                         }}
                                     />
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-3">
-                                            <Button variant="ghost" size="sm"
-                                                    onClick={() => isPlaying ? videoRef.current?.pause() : videoRef.current?.play()}>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => isPlaying ? videoRef.current?.pause() : videoRef.current?.play()}
+                                            >
                                                 {isPlaying ? <Pause size={20}/> : <Play size={20}/>}
                                             </Button>
                                             <span className="text-xs font-mono text-slate-500">
-                        {(currentTimestamp / 1000).toFixed(1)}s / {(videoDuration / 1000).toFixed(1)}s
-                      </span>
+                                                {(videoDuration / 1000).toFixed(1)}s
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
@@ -323,8 +335,8 @@ export default function Home() {
                         <CardTitle className="text-sm flex items-center gap-2">
                             Kết quả phát hiện vi phạm
                             <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded-full text-[10px]">
-                {(mediaType === 'video' ? violationFrames.length : detectionFramesList.length)} Frames
-              </span>
+                                {(mediaType === 'video' ? violationFrames.length : detectionFramesList.length)} Frames
+                            </span>
                         </CardTitle>
                     </CardHeader>
                     <CardContent>
@@ -345,8 +357,7 @@ export default function Home() {
                                                     alt={`Violation frame ${frame.frame_number}`}
                                                     className="w-full h-full object-cover"
                                                 />
-                                                <div
-                                                    className="absolute top-1 right-1 bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-md font-bold">
+                                                <div className="absolute top-1 right-1 bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-md font-bold">
                                                     {frame.detections?.length || 0}
                                                 </div>
                                             </div>
@@ -360,15 +371,10 @@ export default function Home() {
                                         <div
                                             key={frame.ts}
                                             className="group relative border rounded-lg overflow-hidden hover:ring-2 hover:ring-primary transition-all cursor-pointer"
-                                            onClick={() => {
-                                                if (videoRef.current) videoRef.current.currentTime = frame.ts / 1000;
-                                            }}
                                         >
-                                            <div
-                                                className="aspect-video bg-slate-200 flex items-center justify-center relative">
+                                            <div className="aspect-video bg-slate-200 flex items-center justify-center relative">
                                                 <ImageIcon size={16} className="text-slate-400"/>
-                                                <div
-                                                    className="absolute top-1 right-1 bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-md font-bold">
+                                                <div className="absolute top-1 right-1 bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-md font-bold">
                                                     {frame.count}
                                                 </div>
                                             </div>
@@ -380,8 +386,7 @@ export default function Home() {
                                 )}
                             </div>
                         ) : (
-                            <div
-                                className="h-32 flex items-center justify-center border-2 border-dashed rounded-lg text-slate-400 text-sm">
+                            <div className="h-32 flex items-center justify-center border-2 border-dashed rounded-lg text-slate-400 text-sm">
                                 Chưa có dữ liệu vi phạm được phát hiện
                             </div>
                         )}

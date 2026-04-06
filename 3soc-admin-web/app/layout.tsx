@@ -40,7 +40,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`font-sans antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
+      <body className={`font-sans antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`} suppressHydrationWarning>
         <div className="flex flex-col min-h-screen">
           <TopBar />
           <main className="flex-1">

@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import './topbar.css';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
 
 export function TopBar() {
   const pathname = usePathname();
@@ -32,9 +32,8 @@ export function TopBar() {
       const token = localStorage.getItem('access_token') || localStorage.getItem('auth_token');
       if (!token) {
         setUserRole(null);
-        setUserName('User');
-        setUserInitials('U');
         setLoading(false);
+        router.push('/login');
         return;
       }
 
@@ -54,11 +53,17 @@ export function TopBar() {
           ? userData.username.substring(0, 2).toUpperCase()
           : userData.email?.substring(0, 2).toUpperCase() || 'U';
         setUserInitials(initials);
+      } else if (response.status === 401) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('auth_token');
+        setUserRole(null);
+        router.push('/login');
       } else {
         setUserRole(null);
       }
     } catch (error) {
       console.error('Error fetching user role:', error);
+      setUserRole(null);
     } finally {
       setLoading(false);
     }
@@ -94,8 +99,7 @@ export function TopBar() {
   ];
 
   const visibleItems = navItems.filter(item => {
-    if (loading) return true;
-    console.log('Checking visibility for:', item.label, 'User Role:', userRole);
+    if (loading) return !item.requireAdmin; // khi đang load, chỉ hiện item không cần admin
     if (item.requireAdmin && userRole !== 'admin') return false;
     return true;
   });

@@ -10,7 +10,7 @@ import {User, Lock, Settings, LogOut, Users} from 'lucide-react';
 import {useRouter} from 'next/navigation';
 import {useToast} from '@/hooks/use-toast';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api').replace(/\/api\/?$/, '');
 
 export default function SettingsPage() {
     const router = useRouter();

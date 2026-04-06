@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BoundingBox } from '@/lib/WebSocketClient';
+import type { BoundingBox } from '@/hooks/useRealtimeDetection';
 
 export type ViolationFrame = {
   frame_number: number;
@@ -9,7 +9,7 @@ export type ViolationFrame = {
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-const DETECT_SAMPLE_MS = 100;
+const DETECT_SAMPLE_MS = 50;
 const SAVE_COOLDOWN_MS = 200;
 const SAVE_IMAGE_MS = 2000;
 
@@ -26,6 +26,9 @@ export function useViolationSSE({
   const onViolationRef = useRef<typeof onViolation>(onViolation);
   const seenKeysRef = useRef<Set<string>>(new Set());
   const [violationFrames, setViolationFrames] = useState<ViolationFrame[]>([]);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanDone, setScanDone] = useState(false);
+  const totalFramesRef = useRef(0);
 
   useEffect(() => {
     onViolationRef.current = onViolation;
@@ -44,6 +47,9 @@ export function useViolationSSE({
   const resetViolations = useCallback(() => {
     seenKeysRef.current.clear();
     setViolationFrames([]);
+    setScanProgress(0);
+    setScanDone(false);
+    totalFramesRef.current = 0;
   }, []);
 
   useEffect(() => {
@@ -62,23 +68,45 @@ export function useViolationSSE({
     es.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (!payload?.type || !payload?.data) return;
+        if (!payload?.type) return;
+
+        if (payload.type === 'metadata') {
+          totalFramesRef.current = payload.total_frames || 0;
+          setScanProgress(0);
+          setScanDone(false);
+          return;
+        }
 
         if (payload.type === 'detection') {
           const detection = {
-            frame_number: payload.data.frame_number ?? 0,
-            timestamp: payload.data.timestamp,
+            frame_number: payload.data?.frame_number ?? 0,
+            timestamp: payload.data?.timestamp,
             image_path: '',
-            detections: payload.data.detections || [],
+            detections: payload.data?.detections || [],
           } as ViolationFrame;
           onViolationRef.current?.(detection);
+
+          // Cập nhật tiến độ
+          if (totalFramesRef.current > 0) {
+            const pct = Math.min(99, Math.round(
+              ((payload.data?.frame_number || 0) / totalFramesRef.current) * 100
+            ));
+            setScanProgress(pct);
+          }
           return;
         }
 
         if (payload.type === 'violation') {
-          const violation = payload.data as ViolationFrame;
+          const violation = (payload.data ?? payload) as ViolationFrame;
           appendViolation(violation);
           onViolationRef.current?.(violation);
+          return;
+        }
+
+        if (payload.type === 'complete') {
+          setScanProgress(100);
+          setScanDone(true);
+          return;
         }
       } catch (error) {
         console.error('[SSE] Invalid payload:', error);
@@ -109,5 +137,7 @@ export function useViolationSSE({
   return {
     violationFrames,
     resetViolations,
+    scanProgress,
+    scanDone,
   };
 }

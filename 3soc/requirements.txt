@@ -10,7 +10,7 @@ uvicorn[standard]==0.40.0     # ASGI server chạy FastAPI (bao gồm websockets
 # --- AI / Computer Vision ---
 ultralytics==8.3.251          # YOLOv8/v11 - framework load model .pt và chạy inference
 opencv-python==4.12.0.88      # Đọc video, decode frame, xử lý ảnh
-torch==2.9.1                  # PyTorch - deep learning backend (YOLO chạy trên torch)
+torch==2.2.2+cu118#laptop GTX 1660 Ti  # PyTorch - deep learning backend (YOLO chạy trên torch)
 torchvision==0.24.1           # Thư viện vision bổ trợ cho PyTorch
 numpy==2.2.6                  # Xử lý mảng số, thao tác pixel frame
 pillow==12.1.0                # Đọc/ghi ảnh (YOLO render kết quả detection)
