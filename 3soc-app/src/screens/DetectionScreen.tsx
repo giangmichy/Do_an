@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Image,
   FlatList,
+  Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
@@ -19,6 +20,17 @@ import BoundingBoxOverlay from '../components/BoundingBoxOverlay';
 import { useRealtimeVideoDetection } from './detection/useRealtimeVideoDetection';
 import type { MediaType, ViolationFrame } from './detection/types';
 
+const LABEL_VI: Record<string, string> = {
+  co3soc: 'Cờ 3 sọc',
+  duongluoibo: 'Đường lưỡi bò',
+  vnmap: 'VN',
+};
+
+const MODEL_COLORS: Record<string, string> = {
+  co3soc: '#ef4444',
+  duongluoibo: '#22c55e',
+  vnmap: '#3b82f6',
+};
 
 export default function DetectionScreen() {
   const [mediaUri, setMediaUri] = useState<string | null>(null);
@@ -35,23 +47,24 @@ export default function DetectionScreen() {
   const [videoNaturalSize, setVideoNaturalSize] = useState({ width: 0, height: 0 });
   const [currentPositionMs, setCurrentPositionMs] = useState(0);
   const currentPositionMsRef = useRef(0);
-  const lastStatusTimeRef = useRef(0);   // wall-clock lúc nhận status mới nhất
-  const lastStatusPosRef = useRef(0);    // positionMillis của status đó
+  const lastStatusTimeRef = useRef(0);
+  const lastStatusPosRef = useRef(0);
   const [videoDurationMs, setVideoDurationMs] = useState(0);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
-  const videoRef = useRef<Video>(null);
+  // Detail modal state
+  const [selectedViolation, setSelectedViolation] = useState<ViolationFrame | null>(null);
+  const [modalImageSize, setModalImageSize] = useState({ width: 0, height: 0 });
 
+  const videoRef = useRef<Video>(null);
   const lastRenderPosRef = useRef(0);
 
-  // Extrapolate position mỗi 16ms từ last known status — không cần async call
   useEffect(() => {
     if (!isVideoPlaying) return;
     const id = setInterval(() => {
       const elapsed = Date.now() - lastStatusTimeRef.current;
       const pos = lastStatusPosRef.current + elapsed;
       currentPositionMsRef.current = pos;
-      // Chỉ trigger re-render mỗi 80ms để tránh quá nhiều render
       if (pos - lastRenderPosRef.current >= 80) {
         lastRenderPosRef.current = pos;
         setCurrentPositionMs(pos);
@@ -64,8 +77,9 @@ export default function DetectionScreen() {
     isDetecting,
     violationFrames,
     currentVideoBoxes,
+    scanDone,
+    scanProgress,
     startVideoDetection,
-    stopDetection,
     resetRealtimeState,
   } = useRealtimeVideoDetection({
     videoRef,
@@ -78,17 +92,14 @@ export default function DetectionScreen() {
     currentPositionMsRef,
   });
 
-  const modelColorMap: Record<string, string> = {
-    co3soc: '#ef4444',
-    duongluoibo: '#22c55e',
-    vnmap: '#3b82f6',
-  };
-
-  const modelNameMap: Record<string, string> = {
-    co3soc: 'Cờ 3 sọc',
-    duongluoibo: 'Đường lưỡi bò',
-    vnmap: 'Bản đồ VN',
-  };
+  // Auto-start detection when uploadedFileId becomes available after upload
+  const pendingAutoStartRef = useRef(false);
+  useEffect(() => {
+    if (pendingAutoStartRef.current && uploadedFileId && mediaType === 'video') {
+      pendingAutoStartRef.current = false;
+      startVideoDetection();
+    }
+  }, [uploadedFileId, mediaType, startVideoDetection]);
 
   const detectImageBySource = useCallback(async (uri: string, name: string) => {
     setIsProcessing(true);
@@ -147,6 +158,7 @@ export default function DetectionScreen() {
       setIsUploadingVideo(true);
       try {
         const uploaded = await apiClient.uploadFile(asset.uri, name, vid);
+        pendingAutoStartRef.current = true;
         setUploadedFileId(uploaded.id);
       } catch (err: any) {
         Alert.alert('Upload lỗi', err?.message || 'Không thể tải video lên backend');
@@ -159,27 +171,9 @@ export default function DetectionScreen() {
     setVideoId('');
   };
 
-  const handleDetect = () => {
-    if (mediaType === 'image') {
-      if (!mediaUri || !fileName) return;
-      void detectImageBySource(mediaUri, fileName);
-      return;
-    }
-
-    if (mediaType === 'video') {
-      if (isDetecting) {
-        stopDetection();
-      } else {
-        if (isUploadingVideo || !uploadedFileId) {
-          Alert.alert('Dang chuan bi', 'Video dang upload, vui long cho upload xong roi bam detect.');
-          return;
-        }
-        const ok = startVideoDetection();
-        if (!ok) {
-          Alert.alert('Thiếu dữ liệu', 'Chưa có file upload để bắt đầu phát hiện');
-        }
-      }
-    }
+  const handleViewDetections = () => {
+    if (!scanDone) return;
+    // Scroll to violations section or just a no-op — button is the anchor
   };
 
   const handleSeekToViolation = async (timestamp: number) => {
@@ -192,6 +186,17 @@ export default function DetectionScreen() {
     }
   };
 
+  const handleOpenViolationModal = (item: ViolationFrame) => {
+    setSelectedViolation(item);
+    setModalImageSize({ width: 0, height: 0 });
+  };
+
+  const handleSeekAndCloseModal = async () => {
+    if (!selectedViolation) return;
+    await handleSeekToViolation(selectedViolation.timestamp);
+    setSelectedViolation(null);
+  };
+
   const renderViolationItem = ({ item }: { item: ViolationFrame }) => {
     const imageUrl = item.image_path?.startsWith('http')
       ? item.image_path
@@ -199,7 +204,7 @@ export default function DetectionScreen() {
     return (
       <TouchableOpacity
         style={styles.violationCard}
-        onPress={() => handleSeekToViolation(item.timestamp)}
+        onPress={() => handleOpenViolationModal(item)}
       >
         <Image source={{ uri: imageUrl }} style={styles.violationImage} resizeMode="cover" />
         <View style={styles.violationBadge}>
@@ -209,6 +214,12 @@ export default function DetectionScreen() {
       </TouchableOpacity>
     );
   };
+
+  const modalImageUrl = selectedViolation
+    ? selectedViolation.image_path?.startsWith('http')
+      ? selectedViolation.image_path
+      : `${BACKEND_BASE_URL}${selectedViolation.image_path}`
+    : null;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -232,28 +243,33 @@ export default function DetectionScreen() {
           </View>
         ) : null}
 
-        <TouchableOpacity
-          style={[styles.detectButton, (!mediaUri || isProcessing || (mediaType === 'video' && (isUploadingVideo || !uploadedFileId))) && styles.detectButtonDisabled]}
-          onPress={handleDetect}
-          disabled={!mediaUri || isProcessing || (mediaType === 'video' && (isUploadingVideo || !uploadedFileId))}
-        >
-          {isProcessing || isUploadingVideo ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Ionicons name="scan-outline" size={20} color="#fff" />
-          )}
-          <Text style={styles.detectButtonText}>
-            {mediaType === 'video'
-              ? isUploadingVideo
-                ? 'Đang upload video...'
-                : isDetecting
-                  ? 'Dừng phát hiện'
-                  : 'Bắt đầu phát hiện'
-              : isProcessing
-                ? 'Đang phân tích...'
-                : 'Bắt đầu phát hiện'}
-          </Text>
-        </TouchableOpacity>
+        {mediaType === 'image' && (
+          <TouchableOpacity
+            style={[styles.detectButton, (!mediaUri || isProcessing) && styles.detectButtonDisabled]}
+            onPress={() => { if (mediaUri && fileName) void detectImageBySource(mediaUri, fileName); }}
+            disabled={!mediaUri || isProcessing}
+          >
+            {isProcessing ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Ionicons name="scan-outline" size={20} color="#fff" />
+            )}
+            <Text style={styles.detectButtonText}>
+              {isProcessing ? 'Đang phân tích...' : 'Bắt đầu phát hiện'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {mediaType === 'video' && (
+          <TouchableOpacity
+            style={[styles.detectButton, (!scanDone || isUploadingVideo) && styles.detectButtonDisabled]}
+            onPress={handleViewDetections}
+            disabled={!scanDone || isUploadingVideo}
+          >
+            <Ionicons name="eye-outline" size={20} color="#fff" />
+            <Text style={styles.detectButtonText}>Xem phát hiện</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {mediaUri && (
@@ -290,7 +306,6 @@ export default function DetectionScreen() {
                       return;
                     }
                     const posMs = status.positionMillis || 0;
-                    // Lưu snapshot để extrapolate về sau
                     lastStatusPosRef.current = posMs;
                     lastStatusTimeRef.current = Date.now();
                     setIsVideoPlaying(!!status.isPlaying);
@@ -302,8 +317,8 @@ export default function DetectionScreen() {
                     detections={currentVideoBoxes}
                     containerSize={videoLayoutSize}
                     sourceSize={videoNaturalSize}
-                    colorMap={modelColorMap}
-                    labelMap={modelNameMap}
+                    colorMap={MODEL_COLORS}
+                    labelMap={LABEL_VI}
                   />
                 )}
               </View>
@@ -312,6 +327,18 @@ export default function DetectionScreen() {
                   {(currentPositionMs / 1000).toFixed(1)}s / {(videoDurationMs / 1000).toFixed(1)}s
                 </Text>
               </View>
+
+              {/* Loading indicator while scanning */}
+              {isDetecting && !scanDone && (
+                <View style={styles.scanProgressWrap}>
+                  <ActivityIndicator size="small" color="#7c3aed" />
+                  <Text style={styles.scanProgressLabel}>Đang xử lý video...</Text>
+                  <View style={styles.progressBarTrack}>
+                    <View style={[styles.progressBarFill, { width: `${scanProgress}%` }]} />
+                  </View>
+                  <Text style={styles.scanProgressPct}>{scanProgress}%</Text>
+                </View>
+              )}
             </>
           ) : (
             <View
@@ -336,8 +363,8 @@ export default function DetectionScreen() {
                 detections={imageDetections}
                 containerSize={imageLayoutSize}
                 sourceSize={imageNaturalSize}
-                colorMap={modelColorMap}
-                labelMap={modelNameMap}
+                colorMap={MODEL_COLORS}
+                labelMap={LABEL_VI}
               />
             </View>
           )}
@@ -350,11 +377,11 @@ export default function DetectionScreen() {
           {imageDetections.map((det: any, idx: number) => {
             const label = det.label || det.model || 'unknown';
             const conf = det.confidence ?? det.score ?? 0;
-            const color = modelColorMap[label] || '#6b7280';
+            const color = MODEL_COLORS[label] || '#6b7280';
             return (
               <View key={idx} style={styles.detectionRow}>
                 <View style={[styles.detectionDot, { backgroundColor: color }]} />
-                <Text style={styles.detectionLabel}>{modelNameMap[label] || label}</Text>
+                <Text style={styles.detectionLabel}>{LABEL_VI[label] || label}</Text>
                 <Text style={styles.detectionConf}>{(conf * 100).toFixed(1)}%</Text>
               </View>
             );
@@ -383,12 +410,88 @@ export default function DetectionScreen() {
             <View style={styles.emptyState}>
               <Ionicons name="shield-outline" size={32} color="#cbd5e1" />
               <Text style={styles.emptyText}>
-                {isDetecting ? 'Đang phân tích...' : 'Chưa có dữ liệu vi phạm'}
+                {isDetecting && !scanDone ? 'Đang phân tích...' : 'Chưa có dữ liệu vi phạm'}
               </Text>
             </View>
           )}
         </View>
       )}
+
+      {/* Violation detail modal */}
+      <Modal
+        visible={!!selectedViolation}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedViolation(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                Chi tiết vi phạm — {selectedViolation ? (selectedViolation.timestamp / 1000).toFixed(1) : ''}s
+              </Text>
+              <TouchableOpacity onPress={() => setSelectedViolation(null)}>
+                <Ionicons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            {modalImageUrl && (
+              <View
+                style={styles.modalImageWrap}
+                onLayout={(e) => {
+                  const { width, height } = e.nativeEvent.layout;
+                  setModalImageSize({ width, height });
+                }}
+              >
+                <Image
+                  source={{ uri: modalImageUrl }}
+                  style={styles.modalImage}
+                  resizeMode="contain"
+                  onLoad={(e) => {
+                    const src = e.nativeEvent.source;
+                    if (src?.width && src?.height) {
+                      setModalImageSize((prev) =>
+                        prev.width > 0 ? prev : { width: src.width, height: src.height }
+                      );
+                    }
+                  }}
+                />
+                {selectedViolation && modalImageSize.width > 0 && (
+                  <BoundingBoxOverlay
+                    detections={selectedViolation.detections || []}
+                    containerSize={modalImageSize}
+                    sourceSize={modalImageSize}
+                    colorMap={MODEL_COLORS}
+                    labelMap={LABEL_VI}
+                  />
+                )}
+              </View>
+            )}
+
+            {selectedViolation && selectedViolation.detections?.length > 0 && (
+              <View style={styles.modalDetectionList}>
+                {selectedViolation.detections.map((det: any, idx: number) => {
+                  const label = det.label || det.model || 'unknown';
+                  const conf = det.confidence ?? det.score ?? 0;
+                  const color = MODEL_COLORS[label] || '#6b7280';
+                  return (
+                    <View key={idx} style={styles.detectionRow}>
+                      <View style={[styles.detectionDot, { backgroundColor: color }]} />
+                      <Text style={styles.detectionLabel}>{LABEL_VI[label] || label}</Text>
+                      <Text style={styles.detectionConf}>{(conf * 100).toFixed(1)}%</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            <TouchableOpacity style={styles.seekButton} onPress={handleSeekAndCloseModal}>
+              <Ionicons name="play-circle-outline" size={20} color="#fff" />
+              <Text style={styles.seekButtonText}>Xem trong video</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -464,6 +567,25 @@ const styles = StyleSheet.create({
   },
   videoTimeRow: { marginTop: 8, alignItems: 'flex-end' },
   videoTimeText: { fontSize: 12, color: '#64748b', fontWeight: '500' },
+  scanProgressWrap: {
+    marginTop: 12,
+    gap: 6,
+    alignItems: 'center',
+  },
+  scanProgressLabel: { fontSize: 13, color: '#7c3aed', fontWeight: '500' },
+  progressBarTrack: {
+    width: '100%',
+    height: 6,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: 6,
+    backgroundColor: '#7c3aed',
+    borderRadius: 3,
+  },
+  scanProgressPct: { fontSize: 12, color: '#64748b' },
   detectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -512,4 +634,47 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   emptyText: { fontSize: 13, color: '#94a3b8' },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    width: '100%',
+    maxWidth: 400,
+    gap: 12,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalTitle: { fontSize: 14, fontWeight: '600', color: '#1e293b', flex: 1 },
+  modalImageWrap: {
+    width: '100%',
+    height: 220,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    position: 'relative',
+  },
+  modalImage: { width: '100%', height: '100%' },
+  modalDetectionList: { gap: 2 },
+  seekButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#7c3aed',
+    borderRadius: 10,
+    height: 44,
+    gap: 8,
+    marginTop: 4,
+  },
+  seekButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });

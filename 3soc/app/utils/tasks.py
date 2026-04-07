@@ -1,8 +1,14 @@
 from ultralytics import YOLO
 from pathlib import Path
 import torch
+import cv2
 from typing import List, Dict, Any
 import traceback
+
+# Inference hyperparameters — khớp với script test Python
+INFER_IMGSZ = 640
+INFER_CONF  = 0.25   # script test dùng 0.25
+INFER_IOU   = 0.70   # script test dùng 0.70
 
 
 # Configure device
@@ -54,9 +60,14 @@ def run_detection_on_frame(frame) -> List[Dict[str, Any]]:
     """
     aggregate_results = []
     try:
+        try:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            print(f"[TASKS] BGR→RGB convert failed, using original frame: {e}")
+            frame_rgb = frame
         for model_name, model in _MODELS.items():
             try:
-                res_list = model(frame, save=False, verbose=False)
+                res_list = model(frame_rgb, imgsz=INFER_IMGSZ, conf=INFER_CONF, iou=INFER_IOU, half=False, save=False, verbose=False)
                 if len(res_list) == 0:
                     continue
                 res = res_list[0]
@@ -81,9 +92,16 @@ def run_detection_on_image_temp(image_path: str) -> List[Dict[str, Any]]:
     """
     aggregate_results = []
     try:
+        img = cv2.imread(str(image_path))
+        if img is not None:
+            try:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                print(f"[TASKS] BGR→RGB convert failed for image, using original: {e}")
+        source = img if img is not None else str(image_path)
         for model_name, model in _MODELS.items():
             try:
-                res_list = model(str(image_path), save=False, verbose=False)
+                res_list = model(source, imgsz=INFER_IMGSZ, conf=INFER_CONF, iou=INFER_IOU, half=False, save=False, verbose=False)
                 if len(res_list) == 0:
                     continue
                 res = res_list[0]

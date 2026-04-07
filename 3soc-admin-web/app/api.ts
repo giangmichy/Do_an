@@ -324,6 +324,22 @@ export class ApiClient {
     return response.json();
   }
 
+  async getFileStatus(fileId: string): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseUrl}/files/${fileId}/status`, {
+      headers: this.getHeaders(),
+    });
+    if (!response.ok) throw new Error('Failed to get file status');
+    return response.json();
+  }
+
+  async getDetections(fileId: string): Promise<any> {
+    const response = await fetch(`${this.baseUrl}/files/${fileId}/detections`, {
+      headers: this.getHeaders(),
+    });
+    if (!response.ok) throw new Error('Failed to get detections');
+    return response.json();
+  }
+
   async detectImage(file: File): Promise<any> {
     const formData = new FormData();
     formData.append('file', file);

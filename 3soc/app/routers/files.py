@@ -2,7 +2,7 @@
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import shutil
 import threading
@@ -17,6 +17,12 @@ from app.schemas.file import VideoFileResponse, VideoFileListResponse
 from app.utils.auth import get_current_user_from_token
 from app.utils import tasks
 from app.config import UPLOAD_DIR
+
+SCAN_SAMPLE_MS = 50          # lấy mẫu mỗi 50ms
+SCAN_COOLDOWN_MS = 200       # per-label cooldown
+SCAN_SAVE_IMAGE_MS = 2000    # global cooldown lưu ảnh
+RESULTS_DIR = UPLOAD_DIR / "results"
+
 router = APIRouter(prefix="/files", tags=["files"])
 
 
@@ -111,7 +117,15 @@ async def upload_file(
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
-    
+
+    # Kick off background scan (scan-first architecture)
+    if not _has_cached_violations(video_id):
+        threading.Thread(
+            target=run_full_scan,
+            args=(video_id, actual_path),
+            daemon=True,
+        ).start()
+
     return db_file
 
 
@@ -276,11 +290,210 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
     return normalized
 
 
+# =========================
+# BACKGROUND FULL SCAN
+# =========================
+
+def _get_detections_json_path(file_id: str) -> Path:
+    return RESULTS_DIR / file_id / "detections.json"
+
+
+def _build_detections_json_from_db(file_id: str, video_fps: float, total_frames: int) -> dict:
+    """Rebuild detections.json payload from DB violations (no detections list — only violations)."""
+    violations = _load_violations_from_folder(file_id)
+    return {
+        "file_id": file_id,
+        "video_fps": video_fps,
+        "total_frames": total_frames,
+        "scan_sample_ms": SCAN_SAMPLE_MS,
+        "scanned_at": datetime.now(timezone.utc).isoformat(),
+        "detections": [
+            {
+                "timestamp": v["timestamp"],
+                "frame_number": v["frame_number"],
+                "boxes": v["detections"] or [],
+            }
+            for v in violations
+        ],
+        "violations": violations,
+    }
+
+
+def run_full_scan(file_id: str, video_path: Path):
+    """Background task: scan entire video, write detections.json, update DB status."""
+    db = SessionLocal()
+    try:
+        # Mark processing
+        f = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+        if f:
+            f.status = "processing"
+            db.commit()
+
+        cap = cv2.VideoCapture(str(video_path))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_interval = max(1, int(fps * (SCAN_SAMPLE_MS / 1000)))
+
+        violation_dir = UPLOAD_DIR / "violations" / file_id
+        violation_dir.mkdir(parents=True, exist_ok=True)
+
+        all_detections = []   # every sampled frame (incl. empty)
+        all_violations = []   # frames with saved images
+
+        last_saved_label_ms: dict = {}
+        last_saved_image_ms = -1.0
+
+        frame_index = 0
+        sampled_index = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_index % frame_interval == 0:
+                sampled_index += 1
+                timestamp = int(round((frame_index / fps) * 1000))
+
+                results = tasks.run_detection_on_frame(frame)
+                boxes = _normalize_detections_for_ws_format(results or [])
+
+                all_detections.append({
+                    "timestamp": timestamp,
+                    "frame_number": sampled_index,
+                    "boxes": boxes,
+                })
+
+                if boxes:
+                    eligible = [
+                        d for d in boxes
+                        if (timestamp - last_saved_label_ms.get(d.get("label", ""), 0)) >= SCAN_COOLDOWN_MS
+                    ]
+                    if eligible and (last_saved_image_ms < 0 or (timestamp - last_saved_image_ms) >= SCAN_SAVE_IMAGE_MS):
+                        for d in eligible:
+                            last_saved_label_ms[d.get("label", "")] = timestamp
+                        last_saved_image_ms = float(timestamp)
+
+                        safe_ts = f"{timestamp:08.2f}"
+                        fname = f"ts_{safe_ts}_f{sampled_index}.jpg"
+                        cv2.imwrite(str(violation_dir / fname), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+                        violation = {
+                            "frame_number": sampled_index,
+                            "timestamp": float(timestamp),
+                            "image_path": f"/uploads/violations/{file_id}/{fname}",
+                            "detections": eligible,
+                        }
+                        all_violations.append(violation)
+
+                        try:
+                            db.add(Violation(
+                                video_id=file_id,
+                                frame_number=sampled_index,
+                                timestamp=float(timestamp),
+                                image_path=violation["image_path"],
+                                detections=eligible,
+                            ))
+                            db.commit()
+                        except Exception as e:
+                            db.rollback()
+                            print(f"[SCAN] DB insert error: {e}")
+
+            frame_index += 1
+
+        cap.release()
+
+        # Write detections.json
+        result_dir = RESULTS_DIR / file_id
+        result_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "file_id": file_id,
+            "video_fps": fps,
+            "total_frames": total_frames,
+            "scan_sample_ms": SCAN_SAMPLE_MS,
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+            "detections": all_detections,
+            "violations": all_violations,
+        }
+        with open(_get_detections_json_path(file_id), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+
+        # Mark completed
+        f = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+        if f:
+            f.status = "completed"
+            db.commit()
+
+        print(f"[SCAN] {file_id} done — {len(all_violations)} violations, {len(all_detections)} frames scanned")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            f = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+            if f:
+                f.status = "error"
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+# =========================
+# NEW ENDPOINTS
+# =========================
+
+@router.get("/{file_id}/status")
+def get_file_status(file_id: str, db: Session = Depends(get_db)):
+    """Poll scan status: uploaded | processing | completed | error"""
+    f = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"status": f.status or "uploaded"}
+
+
+@router.get("/{file_id}/detections")
+def get_file_detections(file_id: str, db: Session = Depends(get_db)):
+    """Return full detections.json when completed, or status when still processing."""
+    f = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    status_val = f.status or "uploaded"
+
+    if status_val == "processing":
+        return {"status": "processing", "data": None}
+
+    if status_val not in ("completed",):
+        return {"status": status_val, "data": None}
+
+    # Try disk cache first
+    json_path = _get_detections_json_path(file_id)
+    if json_path.exists():
+        with open(json_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {"status": "completed", "data": data}
+
+    # Rebuild from DB if file missing
+    cap = cv2.VideoCapture(str(_resolve_physical_video_path(f) or ""))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    data = _build_detections_json_from_db(file_id, fps, total)
+    # Persist rebuilt file
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+
+    return {"status": "completed", "data": data}
+
 
 @router.get("/{file_id}/detect-stream")
 def detect_file_stream(
     file_id: str,
-    sample_ms: int = Query(100, ge=50, le=1000),
+    sample_ms: int = Query(50, ge=33, le=1000),
     cooldown_ms: int = Query(500, ge=0, le=5000),
     save_image_ms: int = Query(2000, ge=200, le=10000),
     db: Session = Depends(get_db),
@@ -310,7 +523,9 @@ def detect_file_stream(
 
             yield f"data: {json.dumps({'type':'metadata','total_frames':len(cached),'fps':None})}\n\n"
 
-            for v in cached:
+            for i, v in enumerate(cached):
+                # Emit detection trước để FE tính progress
+                yield f"data: {json.dumps({'type':'detection','data':{'frame_number':i+1,'timestamp':v['timestamp'],'detections':v['detections']}})}\n\n"
                 yield f"data: {json.dumps({'type':'violation','data':v})}\n\n"
 
             yield f"data: {json.dumps({'type':'complete','total_violations':len(cached)})}\n\n"
@@ -498,7 +713,7 @@ def detect_file_stream(
             frame_filename = f"ts_{safe_ts}_f{frame_number}.jpg"
             frame_path = violation_dir / frame_filename
 
-            cv2.imwrite(str(frame_path), frame)
+            cv2.imwrite(str(frame_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
             violation = {
                 "frame_number": frame_number,

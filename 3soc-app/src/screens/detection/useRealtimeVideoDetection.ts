@@ -8,12 +8,10 @@ type SseController = {
   close: () => void;
 };
 
-const BOX_STALE_MS = 500;
-
 const DETECT_SAMPLE_MS = 200;
+const BOX_STALE_MS = DETECT_SAMPLE_MS * 2; // = 400ms
 const SAVE_COOLDOWN_MS = 200;
 const SAVE_IMAGE_MS = 2000;
-const DETECT_DEBUG_LOG = false;
 
 type UseRealtimeVideoDetectionParams = {
   videoRef: React.RefObject<Video | null>;
@@ -43,11 +41,13 @@ export function useRealtimeVideoDetection({
   const [isDetecting, setIsDetecting] = useState(false);
   const [violationFrames, setViolationFrames] = useState<ViolationFrame[]>([]);
   const [videoDetections, setVideoDetections] = useState<Map<number, any[]>>(new Map());
+  const [scanDone, setScanDone] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
 
   const sseRef = useRef<SseController | null>(null);
   const isDetectingRef = useRef(false);
   const seenViolationKeysRef = useRef<Set<string>>(new Set());
-  const lastDebugLogAtRef = useRef(0);
+  const totalFramesRef = useRef(0);
 
   const normalizeTimestampMs = useCallback((rawTs: any) => {
     const ts = Number(rawTs ?? 0);
@@ -74,7 +74,6 @@ export function useRealtimeVideoDetection({
     const key = `${violation.frame_number}-${violation.timestamp}`;
     if (seenViolationKeysRef.current.has(key)) return;
     seenViolationKeysRef.current.add(key);
-
     setViolationFrames((prev) => [...prev, violation]);
   }, []);
 
@@ -99,8 +98,11 @@ export function useRealtimeVideoDetection({
   const resetRealtimeState = useCallback(() => {
     stopDetection();
     seenViolationKeysRef.current.clear();
+    totalFramesRef.current = 0;
     setViolationFrames([]);
     setVideoDetections(new Map());
+    setScanDone(false);
+    setScanProgress(0);
   }, [stopDetection]);
 
   const startSseStream = useCallback(
@@ -117,7 +119,6 @@ export function useRealtimeVideoDetection({
       const flushBuffer = () => {
         const events = buffer.split('\n\n');
         buffer = events.pop() || '';
-
         events.forEach((eventBlock) => {
           if (!eventBlock.trim()) return;
           const dataLines = eventBlock
@@ -166,11 +167,7 @@ export function useRealtimeVideoDetection({
 
       return {
         close: () => {
-          try {
-            xhr.abort();
-          } catch {
-            // ignore abort error
-          }
+          try { xhr.abort(); } catch { /* ignore */ }
         },
       };
     },
@@ -183,8 +180,11 @@ export function useRealtimeVideoDetection({
 
     closeSse();
     seenViolationKeysRef.current.clear();
+    totalFramesRef.current = 0;
     setViolationFrames([]);
     setVideoDetections(new Map());
+    setScanDone(false);
+    setScanProgress(0);
     setIsDetecting(true);
     isDetectingRef.current = true;
 
@@ -197,8 +197,19 @@ export function useRealtimeVideoDetection({
           const payload = JSON.parse(raw);
           if (!payload?.type) return;
 
+          if (payload.type === 'metadata') {
+            totalFramesRef.current = payload.total_frames ?? 0;
+            setScanProgress(0);
+            return;
+          }
+
           if (payload.type === 'detection') {
             if (!payload.data) return;
+            const frameNumber = payload.data.frame_number ?? 0;
+            const total = totalFramesRef.current;
+            if (total > 0) {
+              setScanProgress(Math.min(99, Math.round((frameNumber / total) * 100)));
+            }
             appendVideoDetection(
               normalizeTimestampMs(payload.data.timestamp ?? 0),
               extractBoxes(payload.data),
@@ -208,7 +219,6 @@ export function useRealtimeVideoDetection({
 
           if (payload.type === 'violation') {
             if (!payload.data) return;
-           
             const violation = payload.data as ViolationFrame;
             appendViolation(violation);
             appendVideoDetection(
@@ -218,8 +228,10 @@ export function useRealtimeVideoDetection({
             return;
           }
 
-          if (payload.type === 'complete' && isDetectingRef.current) {
-            stopDetection();
+          if (payload.type === 'complete') {
+            setScanDone(true);
+            setScanProgress(100);
+            // Do NOT call stopDetection() — keep isDetecting=true so UI stays consistent
           }
         } catch {
           // ignore invalid chunk
@@ -252,21 +264,17 @@ export function useRealtimeVideoDetection({
   );
 
   const currentVideoBoxes = useMemo(() => {
-    const currentPositionMs = currentPositionMsRef.current ?? 0;
+    const posMs = currentPositionMsRef.current ?? 0;
     if (videoDetectionTimestamps.length === 0) return [];
 
-    // Tìm detection timestamp lớn nhất mà <= currentPositionMs
-    // (tức là frame gần nhất đã đi qua)
     let result: any[] = [];
     for (let i = videoDetectionTimestamps.length - 1; i >= 0; i--) {
       const ts = videoDetectionTimestamps[i];
-      if (ts > currentPositionMs) continue;
-      // Nếu frame này cách hiện tại quá xa thì thôi
-      if (currentPositionMs - ts > BOX_STALE_MS) break;
+      if (ts > posMs) continue;
+      if (posMs - ts > BOX_STALE_MS) break;
       const boxes = videoDetections.get(ts) || [];
       if (boxes.length > 0) { result = boxes; break; }
     }
-
     return result;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPositionMs, currentPositionMsRef, videoDetectionTimestamps, videoDetections]);
@@ -275,6 +283,8 @@ export function useRealtimeVideoDetection({
     isDetecting,
     violationFrames,
     currentVideoBoxes,
+    scanDone,
+    scanProgress,
     startVideoDetection,
     stopDetection,
     resetRealtimeState,

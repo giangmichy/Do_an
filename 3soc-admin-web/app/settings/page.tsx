@@ -29,7 +29,7 @@ export default function SettingsPage() {
     });
 
     const [settings, setSettings] = useState({
-        detectionFps: 210,
+        detectionFps: typeof window !== 'undefined' ? parseInt(localStorage.getItem('detectionFps') || '50', 10) : 50,
         theme: 'dark'
     });
 
@@ -420,8 +420,8 @@ export default function SettingsPage() {
                                         <div className="flex gap-2 items-center">
                                             <Input
                                                 type="number"
-                                                min="150"
-                                                max="500"
+                                                min="50"
+                                                max="200"
                                                 step="10"
                                                 value={settings.detectionFps}
                                                 onChange={(e) => handleSettingsChange('detectionFps', parseInt(e.target.value))}

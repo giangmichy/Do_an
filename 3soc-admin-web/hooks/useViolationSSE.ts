@@ -9,7 +9,6 @@ export type ViolationFrame = {
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-const DETECT_SAMPLE_MS = 50;
 const SAVE_COOLDOWN_MS = 200;
 const SAVE_IMAGE_MS = 2000;
 
@@ -60,8 +59,10 @@ export function useViolationSSE({
       sseRef.current = null;
     }
 
+    const detectionFps = parseInt(localStorage.getItem('detectionFps') || '50', 10) || 50;
+
     const es = new EventSource(
-      `${API_BASE_URL}/files/${videoId}/detect-stream?sample_ms=${DETECT_SAMPLE_MS}&cooldown_ms=${SAVE_COOLDOWN_MS}&save_image_ms=${SAVE_IMAGE_MS}`
+      `${API_BASE_URL}/files/${videoId}/detect-stream?sample_ms=${detectionFps}&cooldown_ms=${SAVE_COOLDOWN_MS}&save_image_ms=${SAVE_IMAGE_MS}`
     );
     sseRef.current = es;
 

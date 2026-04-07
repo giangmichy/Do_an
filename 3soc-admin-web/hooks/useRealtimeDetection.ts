@@ -33,9 +33,12 @@ export function useRealtimeDetection({
       next.set(timestamp, boxes || []);
 
       if (next.size > MAX_RESULT_ENTRIES) {
-        const oldestTimestamp = next.keys().next().value as number | undefined;
-        if (oldestTimestamp !== undefined) {
-          next.delete(oldestTimestamp);
+        let minTs: number | undefined;
+        for (const ts of next.keys()) {
+          if (minTs === undefined || ts < minTs) minTs = ts;
+        }
+        if (minTs !== undefined) {
+          next.delete(minTs);
         }
       }
 
