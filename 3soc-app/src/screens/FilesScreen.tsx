@@ -381,10 +381,31 @@ export default function FilesScreen() {
               </View>
             ) : null}
 
-            {/* Selected Violation Detail */}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Violation Detail Popup Modal */}
+      <Modal
+        visible={!!selectedViolation}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setSelectedViolation(null)}
+      >
+        <TouchableOpacity
+          style={styles.popupBackdrop}
+          activeOpacity={1}
+          onPress={() => setSelectedViolation(null)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.popupCard} onPress={() => {}}>
+            <View style={styles.popupHeader}>
+              <Text style={styles.detailTitle}>Chi tiết vi phạm</Text>
+              <TouchableOpacity onPress={() => setSelectedViolation(null)}>
+                <Ionicons name="close" size={22} color="#1e293b" />
+              </TouchableOpacity>
+            </View>
             {selectedViolation && (
-              <View style={styles.detailCard}>
-                <Text style={styles.detailTitle}>Chi tiết vi phạm</Text>
+              <>
                 <View
                   style={styles.detailImageWrap}
                   onLayout={(event) => {
@@ -425,10 +446,10 @@ export default function FilesScreen() {
                     <Text style={styles.detailDetConf}>{((d.confidence ?? d.score ?? 0) * 100).toFixed(1)}%</Text>
                   </View>
                 ))}
-              </View>
+              </>
             )}
-          </ScrollView>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
@@ -513,7 +534,7 @@ const styles = StyleSheet.create({
   detailTitle: { fontSize: 14, fontWeight: '600', color: '#1e293b', marginBottom: 8 },
   detailImageWrap: {
     width: '100%',
-    height: 200,
+    height: 220,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#000',
@@ -529,4 +550,25 @@ const styles = StyleSheet.create({
   },
   detailDetLabel: { fontSize: 13, color: '#334155', fontWeight: '500' },
   detailDetConf: { fontSize: 13, color: '#64748b' },
+  // Popup
+  popupBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  popupCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    width: '100%',
+    maxHeight: '85%',
+  },
+  popupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
 });

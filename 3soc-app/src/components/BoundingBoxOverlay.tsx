@@ -112,7 +112,9 @@ export default function BoundingBoxOverlay({
             style={[styles.rect, { left, top, width, height, borderColor: color }]}
           >
             <View style={[styles.labelBg, { backgroundColor: color }]}>
-              <Text style={styles.labelText}>{displayLabel} {score.toFixed(1)}%</Text>
+              <Text style={styles.labelText} numberOfLines={1}>
+                {displayLabel} {score.toFixed(1)}%
+              </Text>
             </View>
           </View>
         );
@@ -136,10 +138,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
+    maxWidth: 200,
   },
   labelText: {
     color: '#fff',
     fontSize: 10,
     fontWeight: '700',
+    flexShrink: 1,
   },
 });

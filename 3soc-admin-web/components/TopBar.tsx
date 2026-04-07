@@ -87,18 +87,13 @@ export function TopBar() {
   }
 
   const navItems = [
-    { href: '/', label: 'Phát hiện', icon: Home, requireAdmin: false },
-    { href: '/users', label: 'Người dùng', icon: Users, requireAdmin: true },
-    { href: '/files', label: 'Files', icon: FileVideo, requireAdmin: false },
-    { href: '/settings', label: 'Cài đặt', icon: Settings, requireAdmin: false },
+    { href: '/', label: 'Phát hiện', icon: Home },
+    { href: '/users', label: 'Người dùng', icon: Users },
+    { href: '/files', label: 'Files', icon: FileVideo },
+    { href: '/settings', label: 'Cài đặt', icon: Settings },
   ];
 
-  const visibleItems = navItems.filter(item => {
-    if (loading) return true;
-    console.log('Checking visibility for:', item.label, 'User Role:', userRole);
-    if (item.requireAdmin && userRole !== 'admin') return false;
-    return true;
-  });
+  const visibleItems = navItems;
 
   return (
     <>
@@ -164,7 +159,7 @@ export function TopBar() {
                   {userName}
                 </DropdownMenuLabel>
                 <DropdownMenuLabel className="text-xs text-gray-500 dark:text-gray-400 font-normal py-1">
-                  {userRole === 'admin' ? 'User' : 'User'}
+                  {userRole === 'admin' ? 'Quản trị viên' : 'Người dùng'}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

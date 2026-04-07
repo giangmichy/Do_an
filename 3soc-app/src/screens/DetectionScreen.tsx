@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Image,
   FlatList,
+  Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
@@ -39,6 +40,8 @@ export default function DetectionScreen() {
   const lastStatusPosRef = useRef(0);    // positionMillis của status đó
   const [videoDurationMs, setVideoDurationMs] = useState(0);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenLayoutSize, setFullscreenLayoutSize] = useState({ width: 0, height: 0 });
 
   const videoRef = useRef<Video>(null);
 
@@ -260,58 +263,147 @@ export default function DetectionScreen() {
         <View style={styles.card}>
           {mediaType === 'video' ? (
             <>
+              {/* Normal view - ẩn khi fullscreen nhưng vẫn giữ layout */}
               <View
-                style={styles.videoPreviewWrap}
+                style={[styles.videoPreviewWrap, isFullscreen && { height: 0, overflow: 'hidden' }]}
                 onLayout={(event) => {
-                  const { width, height } = event.nativeEvent.layout;
-                  setVideoLayoutSize({ width, height });
+                  if (!isFullscreen) {
+                    const { width, height } = event.nativeEvent.layout;
+                    setVideoLayoutSize({ width, height });
+                  }
                 }}
               >
-                <Video
-                  ref={videoRef}
-                  source={{ uri: mediaUri }}
-                  style={styles.mediaPreview}
-                  shouldPlay={false}
-                  useNativeControls
-                  progressUpdateIntervalMillis={80}
-                  resizeMode={ResizeMode.CONTAIN}
-                  onReadyForDisplay={(event) => {
-                    const naturalSize = event.naturalSize;
-                    if (naturalSize?.width && naturalSize?.height) {
-                      setVideoNaturalSize({
-                        width: naturalSize.width,
-                        height: naturalSize.height,
-                      });
-                    }
-                  }}
-                  onPlaybackStatusUpdate={(status: AVPlaybackStatus) => {
-                    if (!status.isLoaded) {
-                      setIsVideoPlaying(false);
-                      return;
-                    }
-                    const posMs = status.positionMillis || 0;
-                    // Lưu snapshot để extrapolate về sau
-                    lastStatusPosRef.current = posMs;
-                    lastStatusTimeRef.current = Date.now();
-                    setIsVideoPlaying(!!status.isPlaying);
-                    setVideoDurationMs(status.durationMillis || 0);
-                  }}
-                />
-                {videoNaturalSize.width > 0 && videoNaturalSize.height > 0 && (
-                  <BoundingBoxOverlay
-                    detections={currentVideoBoxes}
-                    containerSize={videoLayoutSize}
-                    sourceSize={videoNaturalSize}
-                    colorMap={modelColorMap}
-                    labelMap={modelNameMap}
-                  />
+                {!isFullscreen && (
+                  <>
+                    <Video
+                      ref={videoRef}
+                      source={{ uri: mediaUri }}
+                      style={StyleSheet.absoluteFill}
+                      shouldPlay={false}
+                      useNativeControls={false}
+                      progressUpdateIntervalMillis={80}
+                      resizeMode={ResizeMode.CONTAIN}
+                      onReadyForDisplay={(event) => {
+                        const naturalSize = event.naturalSize;
+                        if (naturalSize?.width && naturalSize?.height) {
+                          setVideoNaturalSize({ width: naturalSize.width, height: naturalSize.height });
+                        }
+                      }}
+                      onPlaybackStatusUpdate={(status: AVPlaybackStatus) => {
+                        if (!status.isLoaded) return;
+                        const posMs = status.positionMillis || 0;
+                        lastStatusPosRef.current = posMs;
+                        lastStatusTimeRef.current = Date.now();
+                        setIsVideoPlaying(!!status.isPlaying);
+                        setVideoDurationMs(status.durationMillis || 0);
+                      }}
+                    />
+                    {videoNaturalSize.width > 0 && videoNaturalSize.height > 0 && (
+                      <BoundingBoxOverlay
+                        detections={currentVideoBoxes}
+                        containerSize={videoLayoutSize}
+                        sourceSize={videoNaturalSize}
+                        colorMap={modelColorMap}
+                        labelMap={modelNameMap}
+                      />
+                    )}
+                    <View style={styles.videoControls}>
+                      <TouchableOpacity
+                        style={styles.videoControlBtn}
+                        onPress={async () => {
+                          if (!videoRef.current) return;
+                          if (isVideoPlaying) await videoRef.current.pauseAsync();
+                          else await videoRef.current.playAsync();
+                        }}
+                      >
+                        <Ionicons name={isVideoPlaying ? 'pause' : 'play'} size={22} color="#fff" />
+                      </TouchableOpacity>
+                      <Text style={styles.videoControlTime}>
+                        {(currentPositionMs / 1000).toFixed(1)}s / {(videoDurationMs / 1000).toFixed(1)}s
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.videoControlBtn}
+                        onPress={() => setIsFullscreen(true)}
+                      >
+                        <Ionicons name="expand-outline" size={20} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  </>
                 )}
               </View>
-              <View style={styles.videoTimeRow}>
-                <Text style={styles.videoTimeText}>
-                  {(currentPositionMs / 1000).toFixed(1)}s / {(videoDurationMs / 1000).toFixed(1)}s
-                </Text>
-              </View>
+
+              {/* Fullscreen Modal - video instance riêng, sync position khi mở */}
+              <Modal
+                visible={isFullscreen}
+                animationType="fade"
+                statusBarTranslucent
+                onRequestClose={() => setIsFullscreen(false)}
+              >
+                <View style={styles.fullscreenContainer}>
+                  <View
+                    style={StyleSheet.absoluteFill}
+                    onLayout={(e) => {
+                      const { width, height } = e.nativeEvent.layout;
+                      setFullscreenLayoutSize({ width, height });
+                    }}
+                  >
+                    <Video
+                      ref={videoRef}
+                      source={{ uri: mediaUri }}
+                      style={StyleSheet.absoluteFill}
+                      shouldPlay={isVideoPlaying}
+                      useNativeControls={false}
+                      progressUpdateIntervalMillis={80}
+                      resizeMode={ResizeMode.CONTAIN}
+                      positionMillis={lastStatusPosRef.current}
+                      onReadyForDisplay={(event) => {
+                        const naturalSize = event.naturalSize;
+                        if (naturalSize?.width && naturalSize?.height) {
+                          setVideoNaturalSize({ width: naturalSize.width, height: naturalSize.height });
+                        }
+                      }}
+                      onPlaybackStatusUpdate={(status: AVPlaybackStatus) => {
+                        if (!status.isLoaded) return;
+                        const posMs = status.positionMillis || 0;
+                        lastStatusPosRef.current = posMs;
+                        lastStatusTimeRef.current = Date.now();
+                        setIsVideoPlaying(!!status.isPlaying);
+                        setVideoDurationMs(status.durationMillis || 0);
+                      }}
+                    />
+                  </View>
+                  {videoNaturalSize.width > 0 && fullscreenLayoutSize.width > 0 && (
+                    <BoundingBoxOverlay
+                      detections={currentVideoBoxes}
+                      containerSize={fullscreenLayoutSize}
+                      sourceSize={videoNaturalSize}
+                      colorMap={modelColorMap}
+                      labelMap={modelNameMap}
+                    />
+                  )}
+                  <View style={styles.fullscreenControls}>
+                    <TouchableOpacity
+                      style={styles.videoControlBtn}
+                      onPress={async () => {
+                        if (!videoRef.current) return;
+                        if (isVideoPlaying) await videoRef.current.pauseAsync();
+                        else await videoRef.current.playAsync();
+                      }}
+                    >
+                      <Ionicons name={isVideoPlaying ? 'pause' : 'play'} size={28} color="#fff" />
+                    </TouchableOpacity>
+                    <Text style={styles.videoControlTime}>
+                      {(currentPositionMs / 1000).toFixed(1)}s / {(videoDurationMs / 1000).toFixed(1)}s
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.videoControlBtn}
+                      onPress={() => setIsFullscreen(false)}
+                    >
+                      <Ionicons name="contract-outline" size={22} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
             </>
           ) : (
             <View
@@ -454,6 +546,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     position: 'relative',
   },
+  videoPreviewHidden: {
+    opacity: 0,
+    pointerEvents: 'none' as any,
+  },
   imagePreviewWrap: {
     width: '100%',
     height: 250,
@@ -464,7 +560,48 @@ const styles = StyleSheet.create({
   },
   videoTimeRow: { marginTop: 8, alignItems: 'flex-end' },
   videoTimeText: { fontSize: 12, color: '#64748b', fontWeight: '500' },
-  detectionRow: {
+  videoControls: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 10,
+  },
+  videoControlBtn: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoControlTime: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  fullscreenContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+  },
+  fullscreenControls: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 10,
+  },  detectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 8,

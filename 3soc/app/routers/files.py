@@ -21,13 +21,13 @@ router = APIRouter(prefix="/files", tags=["files"])
 
 
 def _resolve_physical_video_path(file: VideoFile) -> Optional[Path]:
-    """Resolve physical video path from stored filepath, with legacy fallback."""
+    """Resolve the actual physical video path from the stored filepath, with legacy fallback support."""
     filename = os.path.basename(file.filepath or "")
     direct = UPLOAD_DIR / filename
     if direct.exists():
         return direct
 
-    # Legacy rows may store "/uploads/<id>" without extension.
+    # Legacy records may store "/uploads/<id>" without a file extension.
     candidates = sorted(UPLOAD_DIR.glob(f"{filename}.*")) if filename else []
     if candidates:
         return candidates[0]
@@ -50,26 +50,26 @@ async def upload_file(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Upload a video file"""
-    # Get user from token
+    """Upload a video file."""
+    # Get user info from token
     user_data = get_current_user_from_token(authorization)
     user_id = user_data.get("user_id")
     
-    # Validate file type
+    # Validate that the uploaded file is a video
     if not file.content_type.startswith("video/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only video files are allowed"
         )
     
-    # Generate unique filename
+    # Generate the final filename and path
     # timestamp = int(os.path.getmtime(__file__) * 1000) if os.path.exists(__file__) else 0
     # file_ext = Path(file.filename).suffix
     # unique_filename = f"{timestamp}_{file.filename}"
-    file_ext = Path(file.filename).suffix # Láº¥y .mp4, .mov...
+    file_ext = Path(file.filename).suffix # Get the extension, e.g. .mp4, .mov...
     actual_path = UPLOAD_DIR / f"{video_id}{file_ext}"
     
-    # Save file
+    # Save the uploaded file to disk
     try:
         with actual_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -96,7 +96,7 @@ async def upload_file(
         print(f"Failed to get video duration: {e}")
     
     # Create database record
-    # Store web-accessible path for frontend
+    # Store a web-accessible path for frontend usage
     web_path = f"/uploads/{video_id}{file_ext}"
 
     db_file = VideoFile(
@@ -125,8 +125,8 @@ def get_files(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Get list of files - users see only their own, admins see all"""
-    # Get user from token
+    """Get the list of files. Regular users only see their own files, admins see all files."""
+    # Get user info from token
     user_data = get_current_user_from_token(authorization)
     user_id = user_data.get("user_id")
     role = user_data.get("role")
@@ -138,12 +138,12 @@ def get_files(
 
     offset = (page - 1) * page_size
     
-    # Filter based on role
+    # Filter records based on user role
     if role == "admin":
-        # Admin sees all files
+        # Admin can see all files
         base_query = db.query(VideoFile).options(joinedload(VideoFile.owner))
     else:
-        # Regular users see only their own files
+        # Regular users can only see their own files
         base_query = db.query(VideoFile).options(joinedload(VideoFile.owner)).filter(VideoFile.user_id == user_id)
 
     total = base_query.count()
@@ -171,22 +171,22 @@ def get_files(
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_file(file_id: str, db: Session = Depends(get_db)):
-    """Delete file"""
+    """Delete a file."""
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     
-    # Delete physical file
+    # Delete the physical file from disk
     try:
         # file.filepath is a web path like /uploads/<filename>
-        # Resolve physical path by basename
+        # Resolve the physical path using the basename
         physical_path = _resolve_physical_video_path(file)
         if physical_path and physical_path.exists():
             physical_path.unlink()
     except Exception as e:
         print(f"Warning: Failed to delete physical file: {e}")
     
-    # Delete database record
+    # Delete the database record
     db.delete(file)
     db.commit()
     return None
@@ -194,7 +194,7 @@ def delete_file(file_id: str, db: Session = Depends(get_db)):
 
 
 def _load_violations_from_folder(video_id: str) -> list:
-    """Load violation records from DB."""
+    """Load violation records from the database."""
     db = SessionLocal()
     try:
         rows = (
@@ -220,7 +220,7 @@ def _load_violations_from_folder(video_id: str) -> list:
 
 
 def _has_cached_violations(video_id: str) -> bool:
-    """Return True when there are violation rows in DB for this video."""
+    """Return True if this video already has violation rows in the database."""
     db = SessionLocal()
     try:
         return (
@@ -239,7 +239,7 @@ def _has_cached_violations(video_id: str) -> bool:
 
 
 def _normalize_detections_for_ws_format(detections: list) -> list:
-    """Normalize detection payload to websocket-style bbox format."""
+    """Normalize detection data into websocket-style bounding box format."""
     normalized = []
 
     for det in detections or []:
@@ -258,7 +258,7 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
             })
             continue
 
-        # Convert xyxy format to websocket format.
+        # Convert xyxy format into websocket format.
         if all(k in det for k in ("x1", "y1", "x2", "y2")):
             x1 = float(det.get("x1", 0))
             y1 = float(det.get("y1", 0))
@@ -280,7 +280,7 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
 @router.get("/{file_id}/detect-stream")
 def detect_file_stream(
     file_id: str,
-    sample_ms: int = Query(100, ge=50, le=1000),
+    sample_ms: int = Query(50, ge=50, le=1000),
     cooldown_ms: int = Query(500, ge=0, le=5000),
     save_image_ms: int = Query(2000, ge=200, le=10000),
     db: Session = Depends(get_db),
@@ -328,7 +328,7 @@ def detect_file_stream(
     violation_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================
-    # REALTIME DETECTION
+    # REAL-TIME DETECTION
     # =========================
     def stream_detection():
 
@@ -342,12 +342,12 @@ def detect_file_stream(
             db_new.add(file_update)
             db_new.commit()
 
-        frame_queue = queue.Queue(maxsize=30)
-        result_queue = queue.Queue(maxsize=30)
+        frame_queue = queue.Queue(maxsize=100)
+        result_queue = queue.Queue(maxsize=100)
 
         stop_event = threading.Event()
 
-        worker_count = 1   # náº¿u GPU â†’ 1, CPU â†’ 2-4
+        worker_count = 1   # If using GPU -> 1 worker, if CPU -> 2-4 workers
 
         violation_images = []
 
@@ -446,9 +446,9 @@ def detect_file_stream(
         done_count = 0
         SAVE_COOLDOWN_SECONDS = cooldown_ms / 1000
         SAVE_IMAGE_SECONDS = save_image_ms / 1000
-        # Cooldown riÃªng theo tá»«ng label cho event violation (áº£nh lÆ°u).
+        # Separate cooldown for each label when saving violation events (saved images).
         last_saved_label_ms: dict = {}
-        # Cooldown toÃ n cá»¥c cho viá»‡c lÆ°u áº£nh thumbnail.
+        # Global cooldown for saving thumbnail images.
         last_saved_image_ms = -1.0
 
         # -----------------------
@@ -470,13 +470,13 @@ def detect_file_stream(
             frame = item["frame"]
             detections = item["detections"]
 
-            # 1) Emit detection liÃªn tá»¥c Ä‘á»ƒ FE váº½ bbox mÆ°á»£t.
+            # 1) Continuously emit detection events so the frontend can draw bounding boxes smoothly.
             yield f"data: {json.dumps({'type':'detection','data': {'frame_number': frame_number, 'timestamp': round(timestamp, 2), 'detections': detections}})}\n\n"
             if not detections:
                 continue
 
 
-            # 2) Chá»‰ chá»n label Ä‘á»§ cooldown Ä‘á»ƒ lÆ°u áº£nh violation.
+            # 2) Only keep labels that satisfy the cooldown condition before saving a violation image.
             eligible = [
                 d for d in detections
                 if (timestamp - last_saved_label_ms.get(d.get("label", ""), 0)) / 1000 >= SAVE_COOLDOWN_SECONDS
@@ -485,11 +485,11 @@ def detect_file_stream(
             if not eligible:
                 continue
 
-            # 3) Cháº·n táº§n suáº¥t lÆ°u áº£nh toÃ n cá»¥c.
+            # 3) Limit the overall frequency of saved images.
             if last_saved_image_ms >= 0 and (timestamp - last_saved_image_ms) / 1000 < SAVE_IMAGE_SECONDS:
                 continue
 
-            # Cáº­p nháº­t cooldown sau khi quyáº¿t Ä‘á»‹nh lÆ°u.
+            # Update cooldown trackers after deciding to save.
             for d in eligible:
                 last_saved_label_ms[d.get("label", "")] = timestamp
             last_saved_image_ms = float(timestamp)
@@ -546,7 +546,7 @@ def detect_file_stream(
         }
     )
 
-#  detect image
+# Detect objects in an uploaded image
 @router.post("/detect-image")
 def detect_image(
     file: UploadFile = File(...),
@@ -556,7 +556,7 @@ def detect_image(
     Upload an image file and run detection on it.
     Returns detection results.
     """
-    # Get user from token (optional)
+    # Get user info from token if provided
     user_id = None
     try:
         if authorization:
@@ -565,14 +565,14 @@ def detect_image(
     except Exception as e:
         print(f"[FILES] Warning: Failed to get user from token: {e}")
     
-    # Validate file type
+    # Validate that the uploaded file is an image
     if not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only image files are allowed"
         )
     
-    # Save uploaded image to a temp location
+    # Save the uploaded image to a temporary location
     temp_dir = UPLOAD_DIR / "temp"
     temp_dir.mkdir(exist_ok=True)
     temp_image_path = temp_dir / f"{uuid4()}_{file.filename}"
@@ -600,10 +600,9 @@ def detect_image(
             detail=f"Detection failed: {str(e)}"
         )
     finally:
-        # Clean up temp file
+        # Clean up the temporary file
         try:
             if temp_image_path.exists():
                 temp_image_path.unlink()
         except:
             pass
-            
