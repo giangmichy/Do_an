@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 import cv2
 import json
+from urllib.parse import unquote
 from app.db.db import SessionLocal
 from app.db.models import VideoFile, Violation
 from app.schemas.file import VideoFileResponse, VideoFileListResponse
@@ -66,9 +67,10 @@ async def upload_file(
     # timestamp = int(os.path.getmtime(__file__) * 1000) if os.path.exists(__file__) else 0
     # file_ext = Path(file.filename).suffix
     # unique_filename = f"{timestamp}_{file.filename}"
-    file_ext = Path(file.filename).suffix # Get the extension, e.g. .mp4, .mov...
-    actual_path = UPLOAD_DIR / f"{video_id}{file_ext}"
-    
+    # Decode URL-encoded filename (e.g. %20 → space, %E1%BB%9D → ờ)
+    safe_filename = unquote(file.filename or '')
+    file_ext = Path(safe_filename).suffix  # Get the extension, e.g. .mp4, .mov...
+    actual_path = UPLOAD_DIR / f"{video_id}{file_ext}"    
     # Save the uploaded file to disk
     try:
         with actual_path.open("wb") as buffer:
@@ -101,7 +103,7 @@ async def upload_file(
 
     db_file = VideoFile(
         id=video_id,
-        filename=file.filename,
+        filename=safe_filename,
         filepath=web_path,
         user_id=user_id,
         file_size=file_size,
@@ -575,7 +577,7 @@ def detect_image(
     # Save the uploaded image to a temporary location
     temp_dir = UPLOAD_DIR / "temp"
     temp_dir.mkdir(exist_ok=True)
-    temp_image_path = temp_dir / f"{uuid4()}_{file.filename}"
+    temp_image_path = temp_dir / f"{uuid4()}_{unquote(file.filename or 'image')}"
     
     try:
         with temp_image_path.open("wb") as buffer:
