@@ -35,9 +35,10 @@ run.bat
 
 - API docs: http://localhost:8000/docs
 - Requires MySQL running. Create DB: `CREATE DATABASE detect_3soc CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
-- `.env` file needed: `DATABASE_URL=mysql+pymysql://root:PASSWORD@localhost/detect_3soc` + `SECRET_KEY=...`
+- `.env` file needed: `DATABASE_URL=mysql+pymysql://root:PASSWORD@localhost/detect_3soc` + `SECRET_KEY=...` + `ENCRYPTION_KEY=<base64 32-byte key>`
 - Place YOLO `.pt` model files in `models/` directory: `3soc.pt`, `duongluoibo.pt`, `vnmap.pt`
 - Tables auto-create on startup, default users seeded: `admin/admin123`, `user/user123`
+- If `ENCRYPTION_KEY` is missing, app generates one and prints a warning — save it to `.env` to avoid data loss on restart
 
 ### Mobile App (`3soc-app/`)
 
@@ -82,7 +83,9 @@ npm run dev           # Start Next.js dev server
 │   ├── schemas/         # Pydantic request/response schemas
 │   └── utils/
 │       ├── auth.py      # JWT + Argon2 password hashing
-│       └── tasks.py     # YOLO inference on frames/images
+│       ├── tasks.py     # YOLO inference on frames/images
+│       ├── crypto.py    # AES-256-GCM encryption (email, video, violation images)
+│       └── rate_limiter.py  # In-memory sliding window rate limiter
 ├── models/              # YOLO .pt files (not in git)
 ├── uploads/             # Uploaded videos + violation thumbnails
 └── infer_yolo.py        # Standalone YOLO inference script
@@ -142,6 +145,19 @@ Three YOLO models detect specific violations:
 | `vnmap` | `models/vnmap.pt` | Incorrect Vietnam map | Blue `#3b82f6` |
 
 Models auto-load on backend startup with GPU (CUDA) fallback to CPU. Warm-up runs on a dummy frame to reduce first-inference latency.
+
+---
+
+## Security Mechanisms
+
+| Mechanism | Details |
+|-----------|---------|
+| **Rate Limiting** | Login: 5 attempts/min/IP. Register: 3 attempts/10min/IP. Sliding window, thread-safe. |
+| **Authentication** | All endpoints require JWT except login/register. `detect-stream` accepts `?token=` query param for SSE. Ownership check: users only see/delete own files. |
+| **AES-256-GCM** | Email in DB encrypted. Video files encrypted (`.mp4.enc`) — decrypted to temp for cv2. Violation images encrypted (`.jpg.enc`) — decrypted on-the-fly by `/uploads/{path}` endpoint. |
+| **File Size Limits** | Video: 100 MB. Image: 10 MB. Content-Type validated (`video/*`, `image/*`). |
+| **Password** | Min 6 chars (Pydantic validator). Hashed with Argon2. |
+| **SQL Injection** | Mitigated via SQLAlchemy ORM parameterized queries. |
 
 ## Important Notes
 
