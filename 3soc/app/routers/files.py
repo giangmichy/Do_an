@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status, UploadFile,Form, File, Header, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form, File, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
@@ -17,7 +17,7 @@ from app.db.models import VideoFile, Violation
 from app.schemas.file import VideoFileResponse, VideoFileListResponse
 from app.utils.auth import get_current_user_from_token
 from app.utils import tasks
-from app.config import UPLOAD_DIR
+from app.config import UPLOAD_DIR, MAX_VIDEO_SIZE, MAX_IMAGE_SIZE
 router = APIRouter(prefix="/files", tags=["files"])
 
 
@@ -57,11 +57,21 @@ async def upload_file(
     user_id = user_data.get("user_id")
     
     # Validate that the uploaded file is a video
-    if not file.content_type.startswith("video/"):
+    if not file.content_type or not file.content_type.startswith("video/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only video files are allowed"
         )
+
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_VIDEO_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File size exceeds {MAX_VIDEO_SIZE // (1024 * 1024)} MB limit"
+        )
+    # Reset file pointer for subsequent reads
+    await file.seek(0)
     
     # Generate the final filename and path
     # timestamp = int(os.path.getmtime(__file__) * 1000) if os.path.exists(__file__) else 0
@@ -172,22 +182,32 @@ def get_files(
 
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_file(file_id: str, db: Session = Depends(get_db)):
-    """Delete a file."""
+def delete_file(
+    file_id: str,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Delete a file. Requires authentication. Users can only delete their own files; admins can delete any."""
+    user_data = get_current_user_from_token(authorization)
+    user_id = user_data.get("user_id")
+    role = user_data.get("role")
+
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
+
+    # Non-admin users can only delete their own files
+    if role != "admin" and file.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
+
     # Delete the physical file from disk
     try:
-        # file.filepath is a web path like /uploads/<filename>
-        # Resolve the physical path using the basename
         physical_path = _resolve_physical_video_path(file)
         if physical_path and physical_path.exists():
             physical_path.unlink()
     except Exception as e:
         print(f"Warning: Failed to delete physical file: {e}")
-    
+
     # Delete the database record
     db.delete(file)
     db.commit()
@@ -282,15 +302,25 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
 @router.get("/{file_id}/detect-stream")
 def detect_file_stream(
     file_id: str,
+    authorization: Optional[str] = Header(None),
     sample_ms: int = Query(50, ge=50, le=1000),
     cooldown_ms: int = Query(500, ge=0, le=5000),
     save_image_ms: int = Query(2000, ge=200, le=10000),
     db: Session = Depends(get_db),
 ):
+    """Run detection on a video via SSE stream. Requires authentication."""
+    # Require auth — users can only scan their own files; admins can scan any
+    user_data = get_current_user_from_token(authorization)
+    user_id = user_data.get("user_id")
+    role = user_data.get("role")
 
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+
+    # Non-admin users can only scan their own files
+    if role != "admin" and file.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
 
     video_path = _resolve_physical_video_path(file)
 
@@ -550,7 +580,7 @@ def detect_file_stream(
 
 # Detect objects in an uploaded image
 @router.post("/detect-image")
-def detect_image(
+async def detect_image(
     file: UploadFile = File(...),
     authorization: Optional[str] = Header(None)
 ):
@@ -568,11 +598,20 @@ def detect_image(
         print(f"[FILES] Warning: Failed to get user from token: {e}")
     
     # Validate that the uploaded file is an image
-    if not file.content_type.startswith("image/"):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only image files are allowed"
         )
+
+    # Validate file size
+    content = await file.read()
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File size exceeds 20 MB limit"
+        )
+    await file.seek(0)
     
     # Save the uploaded image to a temporary location
     temp_dir = UPLOAD_DIR / "temp"

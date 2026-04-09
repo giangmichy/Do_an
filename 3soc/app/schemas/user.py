@@ -1,4 +1,5 @@
-from pydantic import BaseModel, EmailStr
+import re
+from pydantic import BaseModel, EmailStr, field_validator
 from datetime import datetime
 from typing import Optional, List
 from app.schemas.response import PaginationMeta
@@ -13,6 +14,25 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("Mật khẩu phải có ít nhất 6 ký tự")
+        return v
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("Mật khẩu phải có ít nhất 6 ký tự")
+        return v
+
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
@@ -20,6 +40,13 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v) < 6:
+            raise ValueError("Mật khẩu phải có ít nhất 6 ký tự")
+        return v
 
 
 class UserResponse(UserBase):
@@ -41,11 +68,6 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
-
-
-class ChangePasswordRequest(BaseModel):
-    old_password: str
-    new_password: str
 
 
 class LogoutResponse(BaseModel):

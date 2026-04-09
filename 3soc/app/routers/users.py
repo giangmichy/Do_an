@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.db.db import SessionLocal
 from app.db.models import User
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, LoginRequest, TokenResponse, ChangePasswordRequest, LogoutResponse, UserListResponse
 from app.utils.auth import get_password_hash, verify_password, create_access_token, get_current_user_from_token, require_admin
+from app.utils.rate_limiter import login_limiter, register_limiter, get_client_ip
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -18,22 +19,25 @@ def get_db():
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_user(user: UserCreate, db: Session = Depends(get_db)):
+def register_user(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     """Register a new user"""
+    # Rate limit: 3 registrations per 10 min per IP
+    register_limiter.check(get_client_ip(request))
+
     # Check if username exists
     if db.query(User).filter(User.username == user.username).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered"
         )
-    
+
     # Check if email exists
     if db.query(User).filter(User.email == user.email).first():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
+
     # Create user
     hashed_password = get_password_hash(user.password)
     db_user = User(
@@ -45,13 +49,16 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    
+
     return db_user
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(login_data: LoginRequest, db: Session = Depends(get_db)):
+def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_db)):
     """Login user and return JWT token"""
+    # Rate limit: 5 attempts per minute per IP
+    login_limiter.check(get_client_ip(request))
+
     user = db.query(User).filter(User.username == login_data.username).first()
     
     if not user or not verify_password(login_data.password, user.password_hash):
