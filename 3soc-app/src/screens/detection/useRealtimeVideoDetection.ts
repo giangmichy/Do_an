@@ -1,4 +1,4 @@
-﻿import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Video } from 'expo-av';
 import { apiClient } from '../../api';
 import { BACKEND_BASE_URL } from '../../config';
@@ -8,12 +8,11 @@ type SseController = {
   close: () => void;
 };
 
-const BOX_STALE_MS = 500;
+const BOX_STALE_MS = 200;
 
-const DETECT_SAMPLE_MS = 200;
+const DETECT_SAMPLE_MS = 180;
 const SAVE_COOLDOWN_MS = 200;
 const SAVE_IMAGE_MS = 2000;
-const DETECT_DEBUG_LOG = false;
 
 type UseRealtimeVideoDetectionParams = {
   videoRef: React.RefObject<Video | null>;
@@ -23,7 +22,10 @@ type UseRealtimeVideoDetectionParams = {
   uploadedFileId: string;
   isVideoPlaying: boolean;
   currentPositionMs: number;
-  currentPositionMsRef: React.RefObject<number>;
+  currentPositionMsRef: React.MutableRefObject<number>;
+  lastStatusPosRef: React.MutableRefObject<number>;
+  lastStatusTimeRef: React.MutableRefObject<number>;
+  lastRenderPosRef: React.MutableRefObject<number>;
 };
 
 export function useRealtimeVideoDetection({
@@ -35,19 +37,105 @@ export function useRealtimeVideoDetection({
   isVideoPlaying,
   currentPositionMs,
   currentPositionMsRef,
+  lastStatusPosRef,
+  lastStatusTimeRef,
+  lastRenderPosRef,
 }: UseRealtimeVideoDetectionParams) {
-  void videoRef;
   void mediaUri;
   void isVideoPlaying;
+  void videoId;
+  void currentPositionMs;
 
   const [isDetecting, setIsDetecting] = useState(false);
+  const [hasDetections, setHasDetections] = useState(false);
   const [violationFrames, setViolationFrames] = useState<ViolationFrame[]>([]);
   const [videoDetections, setVideoDetections] = useState<Map<number, any[]>>(new Map());
+  const [currentVideoBoxes, setCurrentVideoBoxes] = useState<any[]>([]);
 
   const sseRef = useRef<SseController | null>(null);
   const isDetectingRef = useRef(false);
   const seenViolationKeysRef = useRef<Set<string>>(new Set());
-  const lastDebugLogAtRef = useRef(0);
+  const videoDetectionsRef = useRef<Map<number, any[]>>(new Map());
+
+  // Cập nhật videoDetectionsRef mỗi khi state thay đổi
+  useEffect(() => {
+    videoDetectionsRef.current = videoDetections;
+  }, [videoDetections]);
+
+  // Hàm tính box hiện tại theo position → set state
+  const updateCurrentBoxes = useCallback((pos: number) => {
+    const map = videoDetectionsRef.current;
+    const timestamps = Array.from(map.keys()).sort((a, b) => a - b);
+    if (timestamps.length === 0) {
+      setCurrentVideoBoxes([]);
+      return;
+    }
+    for (let i = timestamps.length - 1; i >= 0; i--) {
+      const ts = timestamps[i];
+      if (ts > pos) continue;
+      if (pos - ts > BOX_STALE_MS) break;
+      const boxes = map.get(ts);
+      if (boxes && boxes.length > 0) {
+        setCurrentVideoBoxes(boxes);
+        return;
+      }
+    }
+    setCurrentVideoBoxes([]);
+  }, []);
+
+  // Dùng requestAnimationFrame để cập nhật box mượt 60fps
+  // Thay vì chờ parent poll mỗi 50ms → lag do setState + reconcile
+  useEffect(() => {
+    if (!isDetecting && !hasDetections) return;
+
+    let frameId: number;
+    let lastPos = -1;
+
+    const loop = () => {
+      const pos = currentPositionMsRef.current;
+      if (pos !== lastPos) {
+        lastPos = pos;
+        updateCurrentBoxes(pos);
+      }
+      frameId = requestAnimationFrame(loop);
+    };
+
+    frameId = requestAnimationFrame(loop);
+
+    return () => cancelAnimationFrame(frameId);
+  }, [isDetecting, hasDetections, updateCurrentBoxes]);
+
+  // Sync position từ native mỗi 100ms để giữ ref đồng bộ
+  // Tiếp tục sync khi đã có detection data để box vẫn hiển thị sau khi SSE done
+  useEffect(() => {
+    if (!isDetecting && !hasDetections) return;
+
+    const syncPosition = () => {
+      lastStatusTimeRef.current = Date.now();
+      lastStatusPosRef.current = currentPositionMsRef.current;
+
+      try {
+        videoRef.current?.getStatusAsync().then((status) => {
+          if (status && status.isLoaded) {
+            const pos = status.positionMillis;
+            currentPositionMsRef.current = pos;
+            lastStatusPosRef.current = pos;
+            lastStatusTimeRef.current = Date.now();
+            lastRenderPosRef.current = pos;
+          }
+        }).catch(() => { /* ignore */ });
+      } catch {
+        // ignore
+      }
+    };
+
+    syncPosition();
+
+    const id = setInterval(syncPosition, 100);
+
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDetecting, hasDetections]);
 
   const normalizeTimestampMs = useCallback((rawTs: any) => {
     const ts = Number(rawTs ?? 0);
@@ -74,7 +162,6 @@ export function useRealtimeVideoDetection({
     const key = `${violation.frame_number}-${violation.timestamp}`;
     if (seenViolationKeysRef.current.has(key)) return;
     seenViolationKeysRef.current.add(key);
-
     setViolationFrames((prev) => [...prev, violation]);
   }, []);
 
@@ -88,7 +175,13 @@ export function useRealtimeVideoDetection({
       }
       return next;
     });
-  }, []);
+    if (boxes && boxes.length > 0) setHasDetections(true);
+    // Cập nhật box ngay khi nhận detection mới
+    const pos = currentPositionMsRef.current ?? 0;
+    if (Math.abs(timestamp - pos) <= BOX_STALE_MS && boxes && boxes.length > 0) {
+      setCurrentVideoBoxes(boxes);
+    }
+  }, [currentPositionMsRef]);
 
   const stopDetection = useCallback(() => {
     closeSse();
@@ -101,7 +194,14 @@ export function useRealtimeVideoDetection({
     seenViolationKeysRef.current.clear();
     setViolationFrames([]);
     setVideoDetections(new Map());
-  }, [stopDetection]);
+    videoDetectionsRef.current = new Map();
+    setCurrentVideoBoxes([]);
+    setHasDetections(false);
+    currentPositionMsRef.current = 0;
+    lastStatusPosRef.current = 0;
+    lastStatusTimeRef.current = 0;
+    lastRenderPosRef.current = 0;
+  }, [stopDetection, currentPositionMsRef, lastStatusPosRef, lastStatusTimeRef, lastRenderPosRef]);
 
   const startSseStream = useCallback(
     (
@@ -117,7 +217,6 @@ export function useRealtimeVideoDetection({
       const flushBuffer = () => {
         const events = buffer.split('\n\n');
         buffer = events.pop() || '';
-
         events.forEach((eventBlock) => {
           if (!eventBlock.trim()) return;
           const dataLines = eventBlock
@@ -169,7 +268,7 @@ export function useRealtimeVideoDetection({
           try {
             xhr.abort();
           } catch {
-            // ignore abort error
+            // ignore
           }
         },
       };
@@ -185,6 +284,9 @@ export function useRealtimeVideoDetection({
     seenViolationKeysRef.current.clear();
     setViolationFrames([]);
     setVideoDetections(new Map());
+    videoDetectionsRef.current = new Map();
+    setCurrentVideoBoxes([]);
+    setHasDetections(false);
     setIsDetecting(true);
     isDetectingRef.current = true;
 
@@ -208,7 +310,6 @@ export function useRealtimeVideoDetection({
 
           if (payload.type === 'violation') {
             if (!payload.data) return;
-           
             const violation = payload.data as ViolationFrame;
             appendViolation(violation);
             appendVideoDetection(
@@ -222,7 +323,7 @@ export function useRealtimeVideoDetection({
             stopDetection();
           }
         } catch {
-          // ignore invalid chunk
+          // ignore
         }
       },
       () => {
@@ -245,31 +346,6 @@ export function useRealtimeVideoDetection({
     startSseStream,
     uploadedFileId,
   ]);
-
-  const videoDetectionTimestamps = useMemo(
-    () => Array.from(videoDetections.keys()).sort((a, b) => a - b),
-    [videoDetections],
-  );
-
-  const currentVideoBoxes = useMemo(() => {
-    const currentPositionMs = currentPositionMsRef.current ?? 0;
-    if (videoDetectionTimestamps.length === 0) return [];
-
-    // Tìm detection timestamp lớn nhất mà <= currentPositionMs
-    // (tức là frame gần nhất đã đi qua)
-    let result: any[] = [];
-    for (let i = videoDetectionTimestamps.length - 1; i >= 0; i--) {
-      const ts = videoDetectionTimestamps[i];
-      if (ts > currentPositionMs) continue;
-      // Nếu frame này cách hiện tại quá xa thì thôi
-      if (currentPositionMs - ts > BOX_STALE_MS) break;
-      const boxes = videoDetections.get(ts) || [];
-      if (boxes.length > 0) { result = boxes; break; }
-    }
-
-    return result;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPositionMs, currentPositionMsRef, videoDetectionTimestamps, videoDetections]);
 
   return {
     isDetecting,

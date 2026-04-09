@@ -13,7 +13,8 @@
 4. [Cấu hình](#4-cấu-hình)
 5. [Tổ chức thư mục](#5-tổ-chức-thư-mục)
 6. [Các luồng chức năng chính](#6-các-luồng-chức-năng-chính)
-7. [Thông số kỹ thuật](#7-thông-số-kỹ-thuật)
+7. [Cơ chế đồng bộ bounding box](#7-cơ-chế-đồng-bộ-bounding-box)
+8. [Thông số kỹ thuật](#8-thông-số-kỹ-thuật)
 
 ---
 
@@ -157,33 +158,35 @@ GET /api/files/{uploadedFileId}/detect-stream  ← mở SSE stream
 [App] Mỗi "detection" → lưu vào Map<timestamp, boxes>
       Mỗi "violation"  → thêm thumbnail vào danh sách vi phạm
 
-[App] setInterval(16ms): extrapolate position video hiện tại
-      → tìm boxes gần nhất trong Map → vẽ BoundingBoxOverlay lên video
+[App] requestAnimationFrame: đọc position video → tìm boxes gần nhất trong Map
+      → vẽ BoundingBoxOverlay lên video
 ```
 
 ---
 
-### Cơ chế đồng bộ bounding box với video
+## 7. Cơ chế đồng bộ bounding box
 
-Vấn đề: Backend detect toàn bộ video **trước** (không realtime), trả về tất cả detection timestamp ngay lập tức. Video người dùng mới bắt đầu play từ giây 0.
+**Vấn đề**: `video.getStatusAsync()` trong React Native là **async Promise** (khác với `video.currentTime` đồng bộ trên web). Không thể gọi trong `requestAnimationFrame` vì độ trễ network → position bị lệch.
 
-Giải pháp:
-1. `onPlaybackStatusUpdate` (expo-av, 80ms/lần) → lưu `positionMillis` + `Date.now()` vào ref
-2. `setInterval(16ms)` → tính `estimatedPos = lastKnownPos + (Date.now() - lastUpdateTime)` → **không cần async bridge call**
-3. `useMemo` trigger mỗi 80ms → tìm detection timestamp gần nhất **đã đi qua** (`ts ≤ currentPos`, trong vòng `BOX_STALE_MS`)
-4. Render `BoundingBoxOverlay` với boxes tìm được
+**Giải pháp** — 2 luồng song song:
+
+1. **rAF loop (60fps)**: đọc `currentPositionMsRef.current` → gọi `updateCurrentBoxes(pos)` → tìm box gần nhất trong `videoDetectionsRef` → `setCurrentVideoBoxes` → render
+2. **Sync từ native (100ms)**: `setInterval` gọi `getStatusAsync()` → cập nhật `currentPositionMsRef` để rAF loop luôn có position chính xác
+3. **Parent poll (50ms)**: `DetectionScreen.tsx` poll position từ `onPlaybackStatusUpdate` + `getStatusAsync` → cập nhật cùng ref
+4. **Stale window**: box chỉ hiển thị khi `|pos - detection_ts| ≤ BOX_STALE_MS`
+
+**Khi SSE `complete`**: state `hasDetections = true` → rAF loop + sync vẫn tiếp tục → box vẫn hiển thị khi user tua video sau khi detect xong.
 
 ---
 
-## 7. Thông số kỹ thuật
+## 8. Thông số kỹ thuật
 
 | Thông số | Giá trị | Ý nghĩa |
 |----------|---------|---------|
-| `DETECT_SAMPLE_MS` | 200ms | Backend lấy 1 frame mỗi 200ms video để detect |
-| `SAVE_COOLDOWN_MS` | 200ms | Cooldown theo từng label trước khi lưu ảnh violation tiếp theo |
+| `DETECT_SAMPLE_MS` | 180ms | Backend lấy 1 frame mỗi 180ms video để detect |
+| `SAVE_COOLDOWN_MS` | 200ms | Cooldown tối thiểu giữa 2 lần lưu violation frame cùng label |
 | `SAVE_IMAGE_MS` | 2000ms | Cooldown toàn cục: chỉ lưu tối đa 1 ảnh thumbnail mỗi 2 giây |
-| `BOX_STALE_MS` | 500ms | Box hiện tối đa 500ms sau timestamp detection đó |
-| `DETECT_DEBUG_LOG` | false | Tắt log debug trong production |
+| `BOX_STALE_MS` | 200ms | Box hiển thị khi timestamp detection cách position video ≤ 200ms |
 
 **Màu bounding box:**
 - `co3soc` → 🔴 Đỏ `#ef4444`

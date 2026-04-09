@@ -9,6 +9,8 @@ venv/
 env/
 ENV/
 
+uploads/
+
 # Distribution / packaging
 build/
 dist/

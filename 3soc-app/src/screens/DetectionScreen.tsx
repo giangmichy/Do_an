@@ -51,15 +51,26 @@ export default function DetectionScreen() {
 
   useEffect(() => {
     if (!isVideoPlaying) return;
+    // Poll position thật từ video element mỗi 50ms (giống web dùng video.currentTime)
+    // Thay vì nội suy từ onPlaybackStatusUpdate (không ổn định, drift sau vài giây)
+    let inFlight = false;
     const id = setInterval(() => {
-      const elapsed = Date.now() - lastStatusTimeRef.current;
-      const pos = lastStatusPosRef.current + elapsed;
-      currentPositionMsRef.current = pos;
-      if (pos - lastRenderPosRef.current >= 80) {
-        lastRenderPosRef.current = pos;
-        setCurrentPositionMs(pos);
-      }
-    }, 16);
+      if (inFlight) return;
+      inFlight = true;
+      videoRef.current?.getStatusAsync().then((status) => {
+        if (status && status.isLoaded) {
+          const pos = status.positionMillis;
+          currentPositionMsRef.current = pos;
+          lastStatusPosRef.current = pos;
+          lastStatusTimeRef.current = Date.now();
+          if (pos - lastRenderPosRef.current >= 80) {
+            lastRenderPosRef.current = pos;
+            setCurrentPositionMs(pos);
+          }
+        }
+        inFlight = false;
+      }).catch(() => { inFlight = false; });
+    }, 50);
     return () => clearInterval(id);
   }, [isVideoPlaying]);
 
@@ -79,6 +90,9 @@ export default function DetectionScreen() {
     isVideoPlaying,
     currentPositionMs,
     currentPositionMsRef,
+    lastStatusPosRef,
+    lastStatusTimeRef,
+    lastRenderPosRef,
   });
 
   const modelColorMap: Record<string, string> = {
