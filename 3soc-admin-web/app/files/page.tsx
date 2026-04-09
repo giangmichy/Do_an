@@ -72,7 +72,7 @@ export default function FilesPage() {
             setDetectionResult(null);
 
             const eventSource = new EventSource(
-                `http://localhost:8000/api/files/${fileId}/detect-stream`
+                `http://localhost:8000/api/files/${fileId}/detect-stream?token=${encodeURIComponent(localStorage.getItem('access_token') || '')}`
             );
 
             let violations: any[] = [];

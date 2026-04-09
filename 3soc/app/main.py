@@ -3,14 +3,20 @@ import numpy as np
 from pathlib import Path
 from ultralytics import YOLO
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 from app.routers.users import router as users_router
 from app.routers.files import router as files_router
 from app.db.db import init_db, SessionLocal
 from app.utils.auth import get_password_hash
+from app.utils.crypto import decrypt_bytes
+from app.config import ENCRYPTION_KEY
 from app.db.models import User
+from app.config import UPLOAD_DIR
+import base64
+import os
+import mimetypes
 
 
 
@@ -58,7 +64,32 @@ app.include_router(users_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 
 # Serve uploaded files statically at /uploads
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Encrypted files (.enc) are decrypted on-the-fly before serving
+@app.get("/uploads/{path:path}")
+async def serve_upload(path: str):
+    """Serve uploaded files, decrypting .enc files on the fly."""
+    file_path = UPLOAD_DIR / path
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_bytes = file_path.read_bytes()
+
+    # If encrypted, decrypt and serve
+    if str(file_path).endswith(".enc"):
+        try:
+            plaintext = decrypt_bytes(file_bytes, ENCRYPTION_KEY)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Decryption failed")
+        # Determine content type from the original filename (strip .enc)
+        original_name = file_path.name[:-4]
+        content_type, _ = mimetypes.guess_type(original_name)
+        content_type = content_type or "application/octet-stream"
+        return Response(content=plaintext, media_type=content_type)
+
+    # Serve plaintext as-is
+    content_type, _ = mimetypes.guess_type(str(file_path))
+    content_type = content_type or "application/octet-stream"
+    return Response(content=file_bytes, media_type=content_type)
 
 
 def seed_admin_if_missing():

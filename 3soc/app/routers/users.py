@@ -6,6 +6,35 @@ from app.db.models import User
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, LoginRequest, TokenResponse, ChangePasswordRequest, LogoutResponse, UserListResponse
 from app.utils.auth import get_password_hash, verify_password, create_access_token, get_current_user_from_token, require_admin
 from app.utils.rate_limiter import login_limiter, register_limiter, get_client_ip
+from app.utils.crypto import encrypt_bytes, decrypt_bytes
+from app.config import ENCRYPTION_KEY
+import base64
+
+
+def _encrypt_email(email: str) -> str:
+    return base64.b64encode(encrypt_bytes(email.encode(), ENCRYPTION_KEY)).decode()
+
+
+def _decrypt_email(encrypted: str) -> str:
+    return decrypt_bytes(base64.b64decode(encrypted), ENCRYPTION_KEY).decode()
+
+
+def _user_dict(user: User) -> dict:
+    """Return user as dict with decrypted email."""
+    try:
+        email_plain = _decrypt_email(user.email)
+    except Exception:
+        email_plain = user.email  # fallback for legacy unencrypted data
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": email_plain,
+        "password_hash": user.password_hash,
+        "role": user.role,
+        "is_active": user.is_active,
+        "created_at": user.created_at,
+        "updated_at": user.updated_at,
+    }
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -31,18 +60,28 @@ def register_user(request: Request, user: UserCreate, db: Session = Depends(get_
             detail="Username already registered"
         )
 
-    # Check if email exists
-    if db.query(User).filter(User.email == user.email).first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
+    # Check if email exists (must decrypt all to compare — inefficient but necessary with encryption)
+    all_users = db.query(User).all()
+    for u in all_users:
+        try:
+            if _decrypt_email(u.email) == user.email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Email already registered"
+                )
+        except Exception:
+            # Legacy unencrypted email
+            if u.email == user.email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Email already registered"
+                )
 
     # Create user
     hashed_password = get_password_hash(user.password)
     db_user = User(
         username=user.username,
-        email=user.email,
+        email=_encrypt_email(user.email),
         password_hash=hashed_password,
         role=user.role
     )
@@ -50,7 +89,7 @@ def register_user(request: Request, user: UserCreate, db: Session = Depends(get_
     db.commit()
     db.refresh(db_user)
 
-    return db_user
+    return _user_dict(db_user)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -75,11 +114,11 @@ def login(request: Request, login_data: LoginRequest, db: Session = Depends(get_
     
     # Create access token
     access_token = create_access_token(data={"sub": user.username, "user_id": user.id, "role": user.role})
-    
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": user
+        "user": _user_dict(user)
     }
 
 
@@ -92,7 +131,7 @@ def get_current_user(current_user: dict = Depends(get_current_user_from_token), 
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
-    return user
+    return _user_dict(user)
 
 
 @router.get("", response_model=UserListResponse)
@@ -124,7 +163,7 @@ def get_users(
     users = base_query.offset(offset).limit(page_size).all()
 
     return {
-        "items": users,
+        "items": [_user_dict(u) for u in users],
         "meta": {
             "page": page,
             "page_size": page_size,
@@ -142,7 +181,7 @@ def get_user(user_id: int, db: Session = Depends(get_db), admin_user: dict = Dep
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return _user_dict(user)
 
 
 @router.put("/{user_id}", response_model=UserResponse)
@@ -161,11 +200,18 @@ def update_user(user_id: int, user_update: UserUpdate, db: Session = Depends(get
         user.username = user_update.username
     
     if user_update.email is not None:
-        # Check if new email already exists
-        existing = db.query(User).filter(User.email == user_update.email, User.id != user_id).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already taken")
-        user.email = user_update.email
+        # Check if new email already exists (decrypt all to compare)
+        all_users = db.query(User).all()
+        for u in all_users:
+            if u.id == user_id:
+                continue
+            try:
+                if _decrypt_email(u.email) == user_update.email:
+                    raise HTTPException(status_code=400, detail="Email already taken")
+            except Exception:
+                if u.email == user_update.email:
+                    raise HTTPException(status_code=400, detail="Email already taken")
+        user.email = _encrypt_email(user_update.email)
     
     if user_update.password is not None:
         user.password_hash = get_password_hash(user_update.password)

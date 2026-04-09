@@ -17,16 +17,25 @@ from app.db.models import VideoFile, Violation
 from app.schemas.file import VideoFileResponse, VideoFileListResponse
 from app.utils.auth import get_current_user_from_token
 from app.utils import tasks
+from app.utils.crypto import encrypt_file, decrypt_file_to_temp
+from app.config import ENCRYPTION_KEY
 from app.config import UPLOAD_DIR, MAX_VIDEO_SIZE, MAX_IMAGE_SIZE
 router = APIRouter(prefix="/files", tags=["files"])
 
 
 def _resolve_physical_video_path(file: VideoFile) -> Optional[Path]:
-    """Resolve the actual physical video path from the stored filepath, with legacy fallback support."""
+    """Resolve the actual physical video path from the stored filepath, with legacy fallback support.
+    Supports both plain .mp4 and encrypted .mp4.enc files.
+    """
     filename = os.path.basename(file.filepath or "")
     direct = UPLOAD_DIR / filename
     if direct.exists():
         return direct
+
+    # Check for encrypted version
+    encrypted = UPLOAD_DIR / f"{filename}.enc"
+    if encrypted.exists():
+        return encrypted
 
     # Legacy records may store "/uploads/<id>" without a file extension.
     candidates = sorted(UPLOAD_DIR.glob(f"{filename}.*")) if filename else []
@@ -80,7 +89,13 @@ async def upload_file(
     # Decode URL-encoded filename (e.g. %20 → space, %E1%BB%9D → ờ)
     safe_filename = unquote(file.filename or '')
     file_ext = Path(safe_filename).suffix  # Get the extension, e.g. .mp4, .mov...
-    actual_path = UPLOAD_DIR / f"{video_id}{file_ext}"    
+
+    # Ensure upload directory exists
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    actual_path = UPLOAD_DIR / f"{video_id}{file_ext}"
+    print(f"[FILES] Saving video to: {actual_path}")
+
     # Save the uploaded file to disk
     try:
         with actual_path.open("wb") as buffer:
@@ -90,20 +105,32 @@ async def upload_file(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload file: {str(e)}"
         )
+
+    # Encrypt video and replace plaintext
+    encrypted_path = Path(str(actual_path) + ".enc")
+    try:
+        encrypt_file(str(actual_path), str(encrypted_path), ENCRYPTION_KEY)
+        actual_path.unlink()  # Delete plaintext video
+    except Exception as e:
+        print(f"[FILES] Warning: Video encryption failed: {e}")
+        # Keep plaintext if encryption fails (degraded security, not a hard fail)
+        encrypted_path = actual_path
     
-    # Get file size
-    file_size = actual_path.stat().st_size
-    
-    # Get video duration using OpenCV
+    # Get file size (encrypted version)
+    file_size = encrypted_path.stat().st_size
+
+    # Get video duration using OpenCV (decrypt to temp first)
     duration = None
     try:
-        cap = cv2.VideoCapture(str(actual_path))
+        temp_path = decrypt_file_to_temp(str(encrypted_path), ENCRYPTION_KEY)
+        cap = cv2.VideoCapture(str(temp_path))
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS)
             frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             if fps > 0:
                 duration = frame_count / fps
         cap.release()
+        os.remove(temp_path)
     except Exception as e:
         print(f"Failed to get video duration: {e}")
     
@@ -118,12 +145,11 @@ async def upload_file(
         user_id=user_id,
         file_size=file_size,
         duration=duration,
-        # status="uploaded"
     )
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
-    
+
     return db_file
 
 
@@ -200,13 +226,26 @@ def delete_file(
     if role != "admin" and file.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
 
-    # Delete the physical file from disk
+    # Delete the physical file from disk (encrypted or plain)
     try:
         physical_path = _resolve_physical_video_path(file)
         if physical_path and physical_path.exists():
             physical_path.unlink()
     except Exception as e:
         print(f"Warning: Failed to delete physical file: {e}")
+
+    # Delete associated violation images (encrypted or plain)
+    violation_dir = UPLOAD_DIR / "violations" / file_id
+    if violation_dir.exists():
+        for f in violation_dir.iterdir():
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        try:
+            violation_dir.rmdir()
+        except Exception:
+            pass
 
     # Delete the database record
     db.delete(file)
@@ -303,14 +342,18 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
 def detect_file_stream(
     file_id: str,
     authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
     sample_ms: int = Query(50, ge=50, le=1000),
     cooldown_ms: int = Query(500, ge=0, le=5000),
     save_image_ms: int = Query(2000, ge=200, le=10000),
     db: Session = Depends(get_db),
 ):
-    """Run detection on a video via SSE stream. Requires authentication."""
-    # Require auth — users can only scan their own files; admins can scan any
-    user_data = get_current_user_from_token(authorization)
+    """Run detection on a video via SSE stream. Requires authentication.
+    Token can be passed via Authorization header OR ?token= query param (for SSE).
+    """
+    # SSE (EventSource) can't send custom headers, so allow token in query params
+    auth_token = authorization or (f"Bearer {token}" if token else None)
+    user_data = get_current_user_from_token(auth_token)
     user_id = user_data.get("user_id")
     role = user_data.get("role")
 
@@ -362,6 +405,18 @@ def detect_file_stream(
     # =========================
     # REAL-TIME DETECTION
     # =========================
+
+    # Decrypt encrypted video to temp file if needed
+    temp_video_path: Optional[str] = None
+    is_encrypted = str(video_path).endswith(".enc")
+    if is_encrypted:
+        try:
+            temp_video_path = decrypt_file_to_temp(str(video_path), ENCRYPTION_KEY)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Video decryption failed: {e}")
+
+    effective_path = Path(temp_video_path) if temp_video_path else video_path
+
     def stream_detection():
 
         db_new = SessionLocal()
@@ -388,7 +443,7 @@ def detect_file_stream(
         # -----------------------
         def read_frames():
 
-            cap = cv2.VideoCapture(str(video_path))
+            cap = cv2.VideoCapture(str(effective_path))
 
             fps = cap.get(cv2.CAP_PROP_FPS) or 30
             frame_interval = max(1, int(fps * (sample_ms / 1000)))
@@ -468,7 +523,7 @@ def detect_file_stream(
         # -----------------------
         yield f"data: {json.dumps({'type':'init','detection_id':file_id})}\n\n"
 
-        cap_meta = cv2.VideoCapture(str(video_path))
+        cap_meta = cv2.VideoCapture(str(effective_path))
         fps = cap_meta.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
         cap_meta.release()
@@ -530,12 +585,22 @@ def detect_file_stream(
             frame_filename = f"ts_{safe_ts}_f{frame_number}.jpg"
             frame_path = violation_dir / frame_filename
 
-            cv2.imwrite(str(frame_path), frame)
+            # Write frame to temp, encrypt, then delete temp
+            temp_frame = violation_dir / f"__temp_{frame_filename}"
+            cv2.imwrite(str(temp_frame), frame)
+            try:
+                encrypt_file(str(temp_frame), str(frame_path) + ".enc", ENCRYPTION_KEY)
+                temp_frame.unlink()
+            except Exception as e:
+                print(f"[FILES] Warning: Violation image encryption failed: {e}")
+                # Keep plaintext if encryption fails
+                pass
 
+            violation_filename = f"{frame_filename}.enc"
             violation = {
                 "frame_number": frame_number,
                 "timestamp": round(timestamp, 2),
-                "image_path": f"/uploads/violations/{file_id}/{frame_filename}",
+                "image_path": f"/uploads/violations/{file_id}/{violation_filename}",
                 "detections": eligible
             }
 
@@ -565,6 +630,13 @@ def detect_file_stream(
             db_new.commit()
 
         db_new.close()
+
+        # Cleanup temp decrypted video
+        if temp_video_path and os.path.exists(temp_video_path):
+            try:
+                os.remove(temp_video_path)
+            except Exception:
+                pass
 
         yield f"data: {json.dumps({'type':'complete','total_violations':len(violation_images)})}\n\n"
 

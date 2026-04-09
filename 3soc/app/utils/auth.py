@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
-from app.config import SECRET_KEY, JWT_JWT_ALGORITHM, JWT_EXPIRE_MINUTES
+from app.config import SECRET_KEY, JWT_ALGORITHM, JWT_EXPIRE_MINUTES
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 

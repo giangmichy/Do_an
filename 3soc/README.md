@@ -65,6 +65,63 @@ Backend (3soc) ← FastAPI, port 8000
 | `pymysql` | Driver kết nối MySQL |
 | `python-jose` | Tạo và xác thực JWT token |
 | `passlib[argon2]` | Mã hoá mật khẩu (Argon2) |
+| `cryptography` | AES-256-GCM mã hoá dữ liệu |
+
+---
+
+## Cơ chế bảo mật
+
+### 1. Giới hạn số lần thử (Rate Limiting)
+
+| Endpoint | Giới hạn | Ghi chú |
+|----------|----------|---------|
+| `/api/users/login` | 5 lần/phút theo IP | Chống brute-force mật khẩu |
+| `/api/users/register` | 3 lần/10 phút theo IP | Chống spam đăng ký |
+
+- Rate limiter dạng **sliding window**, an toàn đa luồng (thread-safe Lock)
+- Khi vượt giới hạn → HTTP 429 Too Many Requests
+- Hỗ trợ `X-Forwarded-For` header khi chạy sau reverse proxy
+
+### 2. Xác thực trên mọi endpoint
+
+| Endpoint | Mức truy cập |
+|----------|--------------|
+| `POST /api/users/login`, `/api/users/register` | Công khai |
+| `POST /api/files/upload`, `GET /api/files`, `DELETE /api/files/{id}` | Bắt buộc JWT (Bearer token) |
+| `GET /api/files/{id}/detect-stream` | JWT qua header hoặc `?token=` query param (cho SSE) |
+| `GET /api/users`, `PUT/DELETE /api/users/{id}` | JWT + vai trò **admin** |
+
+- User thường chỉ xem/xoá file của mình; admin thao tác mọi file
+- SSE không gửi được custom header → frontend gửi token qua `?token=` query param
+
+### 3. Mã hoá dữ liệu (AES-256-GCM)
+
+| Dữ liệu | Cách mã hoá |
+|---------|-------------|
+| Email trong DB | Encrypt trước khi INSERT, decrypt khi SELECT — key từ `ENCRYPTION_KEY` |
+| Video trên disk | Encrypt ngay sau upload (`.mp4.enc`), decrypt ra temp file khi detect |
+| Ảnh vi phạm | Encrypt ngay sau `cv2.imwrite` (`.jpg.enc`), decrypt khi serve qua `/uploads/` |
+
+- File `/uploads/*` không còn serve tĩnh mà qua endpoint `/uploads/{path}` — tự động decrypt `.enc`
+- **Quan trọng:** `ENCRYPTION_KEY` phải lưu vào `.env` — mất key = mất dữ liệu
+
+### 4. Giới hạn kích thước upload
+
+| Loại | Giới hạn |
+|------|----------|
+| Video | 100 MB |
+| Ảnh | 10 MB |
+
+- Kiểm tra `Content-Type` header: video phải bắt đầu bằng `video/`, ảnh bằng `image/`
+
+### 5. Kiểm tra độ mạnh mật khẩu
+
+- Mật khẩu tối thiểu **6 ký tự** (validate qua Pydantic)
+- Hash bằng **Argon2** — thuật toán mạnh nhất hiện tại cho password hashing
+
+### 6. Bảo vệ SQL Injection
+
+- Dùng **SQLAlchemy ORM** — mọi query dùng parameterized binding, không拼接 string SQL
 
 ---
 
@@ -83,9 +140,12 @@ Tạo file `.env` ở thư mục gốc:
 ```env
 DATABASE_URL=mysql+pymysql://root:YOUR_PASSWORD@localhost/detect_3soc
 SECRET_KEY=your-secret-key-change-this-in-production
+ENCRYPTION_KEY=<base64 32-byte key>
 ```
 
 > Thay `YOUR_PASSWORD` bằng mật khẩu MySQL của bạn.
+> `ENCRYPTION_KEY` có thể tạo bằng lệnh Python: `python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"`.
+> Nếu bỏ trống, app sẽ tự sinh key và in ra log — **lưu vào `.env`** để tránh mất dữ liệu khi restart.
 
 ### Bước 3: Đặt file mô hình AI
 

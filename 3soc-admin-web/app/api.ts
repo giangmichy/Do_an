@@ -130,6 +130,10 @@ export class ApiClient {
     }
   }
 
+  getToken(): string | null {
+    return this.token;
+  }
+
   private getHeaders(): HeadersInit {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',

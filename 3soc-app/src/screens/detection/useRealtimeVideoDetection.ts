@@ -290,7 +290,8 @@ export function useRealtimeVideoDetection({
     setIsDetecting(true);
     isDetectingRef.current = true;
 
-    const streamUrl = `${BACKEND_BASE_URL}/api/files/${uploadedFileId}/detect-stream?sample_ms=${DETECT_SAMPLE_MS}&cooldown_ms=${SAVE_COOLDOWN_MS}&save_image_ms=${SAVE_IMAGE_MS}`;
+    const apiToken = apiClient.getToken();
+    const streamUrl = `${BACKEND_BASE_URL}/api/files/${uploadedFileId}/detect-stream?sample_ms=${DETECT_SAMPLE_MS}&cooldown_ms=${SAVE_COOLDOWN_MS}&save_image_ms=${SAVE_IMAGE_MS}${apiToken ? `&token=${encodeURIComponent(apiToken)}` : ''}`;
 
     sseRef.current = startSseStream(
       streamUrl,
