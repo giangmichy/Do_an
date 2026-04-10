@@ -86,7 +86,6 @@ Backend (3soc) ← FastAPI, port 8000
 
 | Endpoint | Mức truy cập |
 |----------|--------------|
-| `POST /api/users/login`, `/api/users/register` | Công khai |
 | `POST /api/files/upload`, `GET /api/files`, `DELETE /api/files/{id}` | Bắt buộc JWT (Bearer token) |
 | `GET /api/files/{id}/detect-stream` | JWT qua header hoặc `?token=` query param (cho SSE) |
 | `GET /api/users`, `PUT/DELETE /api/users/{id}` | JWT + vai trò **admin** |
