@@ -1,25 +1,27 @@
 import os
 import base64
 from pathlib import Path
+from dotenv import load_dotenv
 
+# Load .env file from the project root (3soc/)
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _get_or_generate_encryption_key() -> bytes:
-    """Load ENCRYPTION_KEY from env, or generate and print a new one."""
+def _get_encryption_key() -> bytes:
+    """Load ENCRYPTION_KEY from env. Must be set — no auto-generation."""
     raw = os.getenv("ENCRYPTION_KEY")
-    if raw:
-        return base64.b64decode(raw)
-    # Generate a random 32-byte key and print it so the admin can save it
-    key = os.urandom(32)
-    print(f"[WARN] ENCRYPTION_KEY not set. Generated random key: {base64.b64encode(key).decode()}")
-    print("[WARN] Save this key to .env as ENCRYPTION_KEY before restarting!")
-    return key
+    if not raw:
+        raise ValueError(
+            "ENCRYPTION_KEY is not set in .env. "
+            "Please add a base64-encoded 32-byte key to .env file."
+        )
+    return base64.b64decode(raw)
 
 
-ENCRYPTION_KEY = _get_or_generate_encryption_key()
+ENCRYPTION_KEY = _get_encryption_key()
 
 # =========================
 # Database
@@ -29,7 +31,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:1234567890@localh
 # =========================
 # JWT / Auth
 # =========================
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 

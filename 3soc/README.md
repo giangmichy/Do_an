@@ -95,14 +95,75 @@ Backend (3soc) ← FastAPI, port 8000
 
 ### 3. Mã hoá dữ liệu (AES-256-GCM)
 
-| Dữ liệu | Cách mã hoá |
-|---------|-------------|
-| Email trong DB | Encrypt trước khi INSERT, decrypt khi SELECT — key từ `ENCRYPTION_KEY` |
-| Video trên disk | Encrypt ngay sau upload (`.mp4.enc`), decrypt ra temp file khi detect |
-| Ảnh vi phạm | Encrypt ngay sau `cv2.imwrite` (`.jpg.enc`), decrypt khi serve qua `/uploads/` |
+Tất cả dữ liệu nhạy cảm được mã hoá bằng **AES-256-GCM** (thư viện `cryptography`). Key duy nhất từ `ENCRYPTION_KEY` (base64, 32 bytes).
 
-- File `/uploads/*` không còn serve tĩnh mà qua endpoint `/uploads/{path}` — tự động decrypt `.enc`
-- **Quan trọng:** `ENCRYPTION_KEY` phải lưu vào `.env` — mất key = mất dữ liệu
+#### 3.1. Email trong Database
+
+| Bước | Vị trí | Mô tả |
+|------|--------|-------|
+| **Khi đăng ký** | [`users.py:84`](app/routers/users.py#L84) | `email` → `_encrypt_email()` → base64 AES-256-GCM → lưu vào DB |
+| **Khi đọc** | [`users.py:25`](app/routers/users.py#L25) | `_decrypt_email()` → plaintext → trả về response |
+| **Fallback** | [`users.py:26-27`](app/routers/users.py#L26-L27) | Nếu decrypt lỗi (key sai), trả `decryption_failed_{id}@hidden.local` để tránh crash |
+
+```
+Plain email: "admin@example.com"
+    → encrypt_bytes() → nonce(12B) + ciphertext + tag(16B)
+    → base64.b64encode() → "l5Amq3QQ3m3KU0NoFhfvt2..."
+    → lưu vào DB
+```
+
+#### 3.2. Video trên Disk
+
+| Bước | Vị trí | Mô tả |
+|------|--------|-------|
+| **Upload** | [`files.py:109-117`](app/routers/files.py#L109-L117) | Lưu file → `encrypt_file()` → `video.mp4.enc` → xoá file gốc |
+| **Detect** | [`files.py:409-418`](app/routers/files.py#L409-L418) | `decrypt_file_to_temp()` → temp file → cv2 đọc → xoá temp sau khi xong |
+| **Fallback** | [`files.py:116-117`](app/routers/files.py#L116-L117) | Nếu mã hoá lỗi, giữ lại file gốc (degraded security, không fail hard) |
+
+```
+Upload video.mp4 (50MB)
+    → save to uploads/{video_id}.mp4
+    → encrypt_file() → uploads/{video_id}.mp4.enc
+    → unlink() xoá file gốc
+    → DB lưu filepath: /uploads/{video_id}.mp4 (web path)
+```
+
+#### 3.3. Ảnh vi phạm trên Disk
+
+| Bước | Vị trí | Mô tả |
+|------|--------|-------|
+| **Lưu** | [`files.py:588-599`](app/routers/files.py#L588-L599) | `cv2.imwrite()` → temp → `encrypt_file()` → `ts_xxxx.jpg.enc` → xoá temp |
+| **Serve** | Endpoint `/uploads/{path}` | Nếu file `.enc` → `decrypt_file_to_temp()` → serve plaintext → xoá temp |
+| **Fallback** | [`files.py:595-597`](app/routers/files.py#L595-L597) | Nếu mã hoá lỗi, giữ ảnh gốc (degraded security) |
+
+```
+Frame vi phạm tại t=1400ms, frame=42
+    → cv2.imwrite(__temp_ts_00001400.00_f42.jpg)
+    → encrypt_file() → ts_00001400.00_f42.jpg.enc
+    → unlink() xoá temp
+    → DB lưu image_path: /uploads/violations/{id}/ts_00001400.00_f42.jpg.enc
+```
+
+#### 3.4. Quản lý Key mã hoá
+
+| Vấn đề | Giải pháp |
+|--------|-----------|
+| **Key lưu ở đâu** | File `.env` → biến môi trường `ENCRYPTION_KEY` (base64 32-byte) |
+| **Nếu không có key** | [`config.py:13-21`](app/config.py#L13-L21) — App crash ngay khi khởi động với thông báo lỗi rõ ràng |
+| **Nếu mất key** | Toàn bộ email, video, ảnh vi phạm **không thể khôi phục** — backup key là bắt buộc |
+| **Không in ra log** | Không tự sinh key ngẫu nhiên — tránh lộ key trong log file |
+
+**Cách tạo key mới:**
+```bash
+python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
+```
+
+**Migrate email chưa mã hoá:**
+```bash
+cd 3soc
+.\venv\Scripts\activate
+python migrate_emails.py
+```
 
 ### 4. Giới hạn kích thước upload
 
