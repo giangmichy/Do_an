@@ -10,6 +10,7 @@ import {Label} from '@/components/ui/label';
 import {apiClient, User, UserCreate, UserUpdate, SortOrder} from '@/app/api';
 import {Users, Plus, Edit, Trash2, Shield} from 'lucide-react';
 import {Alert, AlertDescription} from '@/components/ui/alert';
+import {useAuth} from '@/contexts/AuthContext';
 import {
     Pagination,
     PaginationContent,
@@ -20,6 +21,7 @@ import {
 } from '@/components/ui/pagination';
 
 export default function UsersPage() {
+    const { isAdmin } = useAuth();
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -139,6 +141,19 @@ export default function UsersPage() {
             minute: '2-digit',
         });
     };
+
+    // Guard: only admin can access
+    if (!isAdmin) {
+        return (
+            <div className="min-h-screen bg-background p-6 flex items-center justify-center">
+                <Alert variant="destructive" className="max-w-md">
+                    <AlertDescription>
+                        Bạn không có quyền truy cập trang này. Vui lòng liên hệ quản trị viên.
+                    </AlertDescription>
+                </Alert>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-background p-6">

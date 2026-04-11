@@ -7,13 +7,14 @@ import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
 import {Label} from '@/components/ui/label';
 import {Alert, AlertDescription} from '@/components/ui/alert';
-import {apiClient} from '@/app/api';
-import {Lock, LogIn, Zap} from 'lucide-react';
+import {LogIn, Zap} from 'lucide-react';
 import {useToast} from '@/hooks/use-toast';
+import {useAuth} from '@/contexts/AuthContext';
 
 export default function LoginPage() {
     const router = useRouter();
     const {toast} = useToast();
+    const {login} = useAuth();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
@@ -34,14 +35,11 @@ export default function LoginPage() {
 
         try {
             setLoading(true);
-            const response = await apiClient.login({username, password});
-
-            // Token is automatically stored by apiClient.login()
-            console.log('[Login] Logged in as:', response.user.username);
+            await login(username, password);
 
             toast({
                 title: 'Thành công',
-                description: `Chào mừng ${response.user.username}!`
+                description: `Chào mừng ${username}!`
             });
 
             // Redirect to home/detection page

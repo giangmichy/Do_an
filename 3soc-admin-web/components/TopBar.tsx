@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { Home, Users, FileVideo, Settings, LogOut, Menu, X, Activity } from 'lucide-react';
+import { usePathname } from 'next/navigation';
+import { Home, FileVideo, Users, Settings, LogOut, Menu, X, Activity } from 'lucide-react';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -13,87 +13,38 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useAuth } from '@/contexts/AuthContext';
 import './topbar.css';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export function TopBar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [userName, setUserName] = useState<string>('User');
-  const [userInitials, setUserInitials] = useState<string>('U');
-  const [loading, setLoading] = useState(true);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user, isAdmin, isLoading } = useAuth();
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
-  const fetchUserRole = async () => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('access_token') || localStorage.getItem('auth_token');
-      if (!token) {
-        setUserRole(null);
-        setUserName('User');
-        setUserInitials('U');
-        setLoading(false);
-        return;
-      }
-
-      const response = await fetch(`${API_URL}/api/users/me`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        }
-      });
-
-      if (response.ok) {
-        const userData = await response.json();
-        setUserRole(userData.role);
-        setUserName(userData.username || userData.email || 'User');
-        const initials = userData.username 
-          ? userData.username.substring(0, 2).toUpperCase()
-          : userData.email?.substring(0, 2).toUpperCase() || 'U';
-        setUserInitials(initials);
-      } else {
-        setUserRole(null);
-      }
-    } catch (error) {
-      console.error('Error fetching user role:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (pathname === '/login') return;
-    fetchUserRole();
-  }, [pathname]);
-
-  const handleLogout = async () => {
-    try {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('auth_token');
-      setUserRole(null);
-      setUserName('User');
-      setUserInitials('U');
-      router.push('/login');
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
+  const handleLogout = () => {
+    localStorage.removeItem('access_token');
+    window.location.replace('/login');
   };
 
   if (pathname === '/login') {
     return null;
   }
 
-  const navItems = [
+  const userName = user?.username || (isLoading ? '' : null);
+  const userInitials = user?.username
+    ? user.username.substring(0, 2).toUpperCase()
+    : '...';
+
+  const allNavItems = [
     { href: '/', label: 'Phát hiện', icon: Home },
-    { href: '/users', label: 'Người dùng', icon: Users },
     { href: '/files', label: 'Files', icon: FileVideo },
+    { href: '/users', label: 'Người dùng', icon: Users },
     { href: '/settings', label: 'Cài đặt', icon: Settings },
   ];
 
-  const visibleItems = navItems;
+  const visibleItems = isAdmin
+    ? allNavItems
+    : allNavItems.filter(item => item.href !== '/users');
 
   return (
     <>
@@ -159,7 +110,7 @@ export function TopBar() {
                   {userName}
                 </DropdownMenuLabel>
                 <DropdownMenuLabel className="text-xs text-gray-500 dark:text-gray-400 font-normal py-1">
-                  {userRole === 'admin' ? 'Quản trị viên' : 'Người dùng'}
+                  {isLoading ? 'Đang tải...' : (isAdmin ? 'Quản trị viên' : 'Người dùng')}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

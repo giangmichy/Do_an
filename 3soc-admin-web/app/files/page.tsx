@@ -17,6 +17,7 @@ import {
     PaginationNext,
     PaginationPrevious
 } from '@/components/ui/pagination';
+import { useAuth } from '@/contexts/AuthContext';
 
 
 export default function FilesPage() {
@@ -24,7 +25,6 @@ export default function FilesPage() {
     const [files, setFiles] = useState<VideoFile[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-    const [uploading, setUploading] = useState(false);
     const [detecting, setDetecting] = useState(false);
     const [resultModalOpen, setResultModalOpen] = useState(false);
     const [detectionResult, setDetectionResult] = useState<DetectionResponse | null>(null);
@@ -34,7 +34,7 @@ export default function FilesPage() {
     const [totalPages, setTotalPages] = useState(0);
     const [totalFiles, setTotalFiles] = useState(0);
     const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-
+    const { isAdmin } = useAuth();
     useEffect(() => {
         loadFiles(page);
     }, [page, sortOrder]);
@@ -275,10 +275,11 @@ export default function FilesPage() {
                                                     >
                                                         <Scan size={14}/>
                                                     </Button>
+                                                   {isAdmin && (
                                                     <Button size="sm" variant="destructive"
                                                             onClick={() => handleDelete(file.id)}>
                                                         <Trash2 size={14}/>
-                                                    </Button>
+                                                    </Button>)}
                                                 </div>
                                             </td>
                                         </tr>
