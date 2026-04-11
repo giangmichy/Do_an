@@ -10,8 +10,6 @@ uvicorn[standard]==0.40.0     # ASGI server chay FastAPI (bao gom websockets, wa
 # --- AI / Computer Vision ---
 ultralytics==8.3.251          # YOLOv8/v11 - framework load model .pt va chay inference
 opencv-python==4.12.0.88      # Doc video, decode frame, xu ly anh
-torch==2.9.1                  # PyTorch - deep learning backend (YOLO chay tren torch)
-torchvision==0.24.1           # Thu vien vision bo tro cho PyTorch
 numpy==2.2.6                  # Xu ly mang so, thao tac pixel frame
 pillow==12.1.0                # Doc/ghi anh (YOLO render ket qua detection)
 

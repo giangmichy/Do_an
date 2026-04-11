@@ -15,8 +15,15 @@ from app.config import ENCRYPTION_KEY
 from app.db.models import User
 from app.config import UPLOAD_DIR
 import base64
+import logging
 import os
 import mimetypes
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 
 

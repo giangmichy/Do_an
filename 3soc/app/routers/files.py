@@ -1,4 +1,6 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form, File, Header, Query
+﻿import logging
+
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form, File, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
@@ -20,6 +22,15 @@ from app.utils import tasks
 from app.utils.crypto import encrypt_file, decrypt_file_to_temp
 from app.config import ENCRYPTION_KEY
 from app.config import UPLOAD_DIR, MAX_VIDEO_SIZE, MAX_IMAGE_SIZE
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("[DETECT-LOG] %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
 router = APIRouter(prefix="/files", tags=["files"])
 
 
@@ -356,10 +367,12 @@ def detect_file_stream(
     user_data = get_current_user_from_token(auth_token)
     user_id = user_data.get("user_id")
     role = user_data.get("role")
+    logger.info(f"[DETECT-STREAM] >>> file_id={file_id}, user_id={user_id}, role={role}, sample_ms={sample_ms}, cooldown_ms={cooldown_ms}, save_image_ms={save_image_ms}")
 
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    logger.info(f"[DETECT-STREAM] Found video record: id={file.id}, filename={file.filename}, status={file.status}, detection_id={file.detection_id}")
 
     # Non-admin users can only scan their own files
     if role != "admin" and file.user_id != user_id:
@@ -368,16 +381,21 @@ def detect_file_stream(
     video_path = _resolve_physical_video_path(file)
 
     if not video_path or not video_path.exists():
+        logger.error(f"[DETECT-STREAM] ERROR: Physical file not found for file_id={file_id}")
         raise HTTPException(status_code=404, detail="Physical file not found")
+    logger.info(f"[DETECT-STREAM] Physical video path resolved: {video_path}")
 
     violation_dir = UPLOAD_DIR / "violations" / file_id
+    logger.info(f"[DETECT-STREAM] Violation directory: {violation_dir}")
 
     # =========================
     # STREAM CACHED RESULT
     # =========================
     if file.id and _has_cached_violations(file_id):
+        logger.info(f"[DETECT-STREAM] >>> Cache HIT for file_id={file_id}, streaming cached violations")
 
         cached = _load_violations_from_folder(file_id)
+        logger.info(f"[DETECT-STREAM] Loaded {len(cached)} cached violations from DB")
 
         def stream_cached():
 
@@ -389,6 +407,7 @@ def detect_file_stream(
                 yield f"data: {json.dumps({'type':'violation','data':v})}\n\n"
 
             yield f"data: {json.dumps({'type':'complete','total_violations':len(cached)})}\n\n"
+            logger.info(f"[DETECT-STREAM] >>> Cache stream DONE for file_id={file_id}, total_violations={len(cached)}")
 
         return StreamingResponse(
             stream_cached(),
@@ -400,6 +419,7 @@ def detect_file_stream(
             }
         )
 
+    logger.info(f"[DETECT-STREAM] >>> Cache MISS for file_id={file_id}, starting REAL-TIME detection")
     violation_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================
@@ -410,14 +430,21 @@ def detect_file_stream(
     temp_video_path: Optional[str] = None
     is_encrypted = str(video_path).endswith(".enc")
     if is_encrypted:
+        logger.info(f"[DETECT-STREAM] Video is encrypted, decrypting to temp...")
         try:
             temp_video_path = decrypt_file_to_temp(str(video_path), ENCRYPTION_KEY)
+            logger.info(f"[DETECT-STREAM] Decrypted to temp: {temp_video_path}")
         except Exception as e:
+            logger.error(f"[DETECT-STREAM] ERROR: Video decryption failed: {e}")
             raise HTTPException(status_code=500, detail=f"Video decryption failed: {e}")
+    else:
+        logger.info(f"[DETECT-STREAM] Video is NOT encrypted, using direct path")
 
     effective_path = Path(temp_video_path) if temp_video_path else video_path
+    logger.info(f"[DETECT-STREAM] Effective video path for detection: {effective_path}")
 
     def stream_detection():
+        logger.info(f"[DETECT-STREAM] stream_detection() started for file_id={file_id}")
 
         db_new = SessionLocal()
 
@@ -428,6 +455,7 @@ def detect_file_stream(
             file_update.status = "processing"
             db_new.add(file_update)
             db_new.commit()
+            logger.info(f"[DETECT-STREAM] Updated DB status -> 'processing', detection_id={file_update.detection_id}")
 
         frame_queue = queue.Queue(maxsize=100)
         result_queue = queue.Queue(maxsize=100)
@@ -442,11 +470,15 @@ def detect_file_stream(
         # FRAME READER
         # -----------------------
         def read_frames():
+            logger.info(f"[DETECT-STREAM] [READER] Thread started, opening video: {effective_path}")
 
             cap = cv2.VideoCapture(str(effective_path))
 
             fps = cap.get(cv2.CAP_PROP_FPS) or 30
             frame_interval = max(1, int(fps * (sample_ms / 1000)))
+            total_frames_cap = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+            logger.info(f"[DETECT-STREAM] [READER] Video info: fps={fps}, total_frames={total_frames_cap}, sample_ms={sample_ms}, frame_interval={frame_interval}")
 
             frame_index = 0
             sampled_index = 0
@@ -468,6 +500,7 @@ def detect_file_stream(
                 frame_index += 1
 
             cap.release()
+            logger.info(f"[DETECT-STREAM] [READER] Done. Total frames read: {frame_index}, sampled frames: {sampled_index}")
 
             for _ in range(worker_count):
                 frame_queue.put(None)
@@ -476,12 +509,18 @@ def detect_file_stream(
         # DETECTION WORKER
         # -----------------------
         def detect_worker():
+            import threading as _th
+            worker_name = _th.current_thread().name
+            logger.info(f"[DETECT-STREAM] [WORKER] {worker_name} started")
+            processed = 0
+            violation_count = 0
 
             while not stop_event.is_set():
 
                 item = frame_queue.get()
 
                 if item is None:
+                    logger.info(f"[DETECT-STREAM] [WORKER] {worker_name} stopping. Processed={processed}, violations_found={violation_count}")
                     break
 
                 frame_number, timestamp, frame = item
@@ -491,15 +530,21 @@ def detect_file_stream(
                     results = tasks.run_detection_on_frame(frame)
                     normalized_results = _normalize_detections_for_ws_format(results or [])
 
+                    if normalized_results:
+                        violation_count += 1
+                        labels = [d.get("label") for d in normalized_results]
+                        logger.info(f"[DETECT-STREAM] [WORKER] {worker_name} frame={frame_number} ts={timestamp}ms detections={labels}")
+
                     result_queue.put({
                         "frame_number": frame_number,
                         "timestamp": timestamp,
                         "frame": frame,
                         "detections": normalized_results
                     })
+                    processed += 1
 
                 except Exception as e:
-                    print("Detection error:", e)
+                    logger.error(f"[DETECT-STREAM] [WORKER] {worker_name} Detection error: {e}")
 
             result_queue.put({"type": "done"})
 
@@ -517,6 +562,7 @@ def detect_file_stream(
 
         for w in workers:
             w.start()
+        logger.info(f"[DETECT-STREAM] All threads started: 1 reader + {worker_count} worker(s)")
 
         # -----------------------
         # INIT SSE
@@ -527,6 +573,7 @@ def detect_file_stream(
         fps = cap_meta.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
         cap_meta.release()
+        logger.info(f"[DETECT-STREAM] Video metadata: fps={fps}, total_frames={total_frames}")
 
         yield f"data: {json.dumps({'type':'metadata','total_frames':total_frames,'fps':fps})}\n\n"
 
@@ -559,6 +606,9 @@ def detect_file_stream(
 
             # 1) Continuously emit detection events so the frontend can draw bounding boxes smoothly.
             yield f"data: {json.dumps({'type':'detection','data': {'frame_number': frame_number, 'timestamp': round(timestamp, 2), 'detections': detections}})}\n\n"
+            if detections:
+                labels = [d.get("label") for d in detections]
+                logger.info(f"[DETECT-STREAM] [RESULT] frame={frame_number} detections={labels}")
             if not detections:
                 continue
 
@@ -574,6 +624,7 @@ def detect_file_stream(
 
             # 3) Limit the overall frequency of saved images.
             if last_saved_image_ms >= 0 and (timestamp - last_saved_image_ms) / 1000 < SAVE_IMAGE_SECONDS:
+                logger.info(f"[DETECT-STREAM] [RESULT] frame={frame_number} has detections but skipped by global save cooldown")
                 continue
 
             # Update cooldown trackers after deciding to save.
@@ -605,6 +656,8 @@ def detect_file_stream(
             }
 
             violation_images.append(violation)
+            violation_labels = [d.get("label") for d in eligible]
+            logger.info(f"[DETECT-STREAM] [VIOLATION SAVED] frame={frame_number} ts={round(timestamp, 2)}ms labels={violation_labels} file={violation_filename}")
 
             try:
                 db_new.add(Violation(
@@ -617,17 +670,19 @@ def detect_file_stream(
                 db_new.commit()
             except Exception as db_err:
                 db_new.rollback()
-                print(f"[FILES] Violation DB insert error: {db_err}")
+                logger.error(f"[DETECT-STREAM] Violation DB insert error: {db_err}")
 
             yield f"data: {json.dumps({'type':'violation','data':violation})}\n\n"
 
         stop_event.set()
+        logger.info(f"[DETECT-STREAM] >>> All workers done. Total violations saved: {len(violation_images)}")
 
         file_update = db_new.query(VideoFile).filter(VideoFile.id == file_id).first()
         if file_update:
             file_update.status = "completed"
             db_new.add(file_update)
             db_new.commit()
+            logger.info(f"[DETECT-STREAM] Updated DB status -> 'completed' for file_id={file_id}")
 
         db_new.close()
 
@@ -635,10 +690,12 @@ def detect_file_stream(
         if temp_video_path and os.path.exists(temp_video_path):
             try:
                 os.remove(temp_video_path)
+                logger.info(f"[DETECT-STREAM] Cleaned up temp decrypted video")
             except Exception:
                 pass
 
         yield f"data: {json.dumps({'type':'complete','total_violations':len(violation_images)})}\n\n"
+        logger.info(f"[DETECT-STREAM] >>> Stream COMPLETE for file_id={file_id}, total_violations={len(violation_images)}")
 
     return StreamingResponse(
         stream_detection(),
