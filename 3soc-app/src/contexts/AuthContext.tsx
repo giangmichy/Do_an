@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { apiClient, User } from '../api';
+import { Alert } from 'react-native';
 
 interface AuthContextType {
   user: User | null;
@@ -37,6 +38,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await apiClient.login({ username, password });
+    if (res.user.role === 'admin') {
+      await apiClient.clearToken();
+      throw new Error('Tài khoản admin không được phép sử dụng ứng dụng này');
+    }
     setToken(res.access_token);
     setUser(res.user);
   }, []);

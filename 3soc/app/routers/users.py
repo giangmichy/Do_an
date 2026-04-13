@@ -48,8 +48,13 @@ def get_db():
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_user(request: Request, user: UserCreate, db: Session = Depends(get_db)):
-    """Register a new user"""
+def register_user(
+    request: Request,
+    user: UserCreate,
+    db: Session = Depends(get_db),
+    admin_user: dict = Depends(require_admin),
+):
+    """Register a new user (ADMIN ONLY)"""
     # Rate limit: 3 registrations per 10 min per IP
     register_limiter.check(get_client_ip(request))
 

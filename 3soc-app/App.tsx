@@ -10,16 +10,12 @@ import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import LoginScreen from './src/screens/LoginScreen';
 import DetectionScreen from './src/screens/DetectionScreen';
 import FilesScreen from './src/screens/FilesScreen';
-import UsersScreen from './src/screens/UsersScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
 function MainTabs() {
-  const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
-
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -27,7 +23,6 @@ function MainTabs() {
           let iconName: keyof typeof Ionicons.glyphMap = 'home';
           if (route.name === 'Phát hiện') iconName = focused ? 'scan' : 'scan-outline';
           else if (route.name === 'Files') iconName = focused ? 'folder' : 'folder-outline';
-          else if (route.name === 'Người dùng') iconName = focused ? 'people' : 'people-outline';
           else if (route.name === 'Cài đặt') iconName = focused ? 'settings' : 'settings-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
@@ -50,9 +45,6 @@ function MainTabs() {
     >
       <Tab.Screen name="Phát hiện" component={DetectionScreen} options={{ headerTitle: 'AI Detection System' }} />
       <Tab.Screen name="Files" component={FilesScreen} options={{ headerTitle: 'Quản lý file' }} />
-      {isAdmin && (
-        <Tab.Screen name="Người dùng" component={UsersScreen} options={{ headerTitle: 'Quản lý người dùng' }} />
-      )}
       <Tab.Screen name="Cài đặt" component={SettingsScreen} options={{ headerTitle: 'Cài đặt' }} />
     </Tab.Navigator>
   );

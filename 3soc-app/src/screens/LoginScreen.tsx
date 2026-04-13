@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, user, logout } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,6 +27,16 @@ export default function LoginScreen() {
       setLoading(false);
     }
   };
+
+  React.useEffect(() => {
+    if (user && user.role === 'admin') {
+      Alert.alert(
+        'Không cho phép',
+        'Ứng dụng này chỉ dành cho người dùng thông thường. Vui lòng sử dụng web admin.',
+        [{ text: 'OK', onPress: () => logout() }]
+      );
+    }
+  }, [user]);
 
   return (
     <View style={styles.container}>
