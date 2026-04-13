@@ -166,12 +166,12 @@ async def startup_event():
         for model_name, model in _LOADED_MODELS.items():
             try:
                 print(f"[INFO] Warming up model: {model_name}")
-                results = model(dummy_frame, device=DEVICE_STR, save=False, verbose=False)
+                results = model(dummy_frame, device=DEVICE_STR, save=False, verbose=True)
                 print(f"[INFO] ✓ Model {model_name} warmed up successfully")
             except TypeError:
                 # Fallback if device parameter not supported
                 try:
-                    results = model(dummy_frame, save=False, verbose=False)
+                    results = model(dummy_frame, save=False, verbose=True)
                     print(f"[INFO] ✓ Model {model_name} warmed up successfully (no device param)")
                 except Exception as e:
                     print(f"[WARN] Failed to warm up {model_name}: {e}")
