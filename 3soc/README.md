@@ -495,7 +495,7 @@ data: {"type": "complete",  "total_violations": 5}
     │
     ▼
 [Backend] Tìm user trong DB → kiểm tra mật khẩu (Argon2)
-          → Tạo JWT token (hết hạn sau 7 ngày)
+          → Tạo JWT token (hết hạn sau 1 ngày)
           → Trả về:
           {
             "access_token": "eyJ...",
