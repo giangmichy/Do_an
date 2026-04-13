@@ -379,7 +379,7 @@ export default function DetectionScreen() {
           <TouchableOpacity style={styles.uploadAreaLarge} onPress={pickMedia}>
             <Ionicons name="cloud-upload-outline" size={48} color="#3b82f6" />
             <Text style={styles.uploadTextLarge}>Nhấn để chọn ảnh hoặc video</Text>
-            <Text style={styles.uploadSubText}>Hỗ trợ MP4, MOV, JPG, PNG</Text>
+            <Text style={styles.uploadSubText}>Hỗ trợ MP4, JPG, PNG</Text>
           </TouchableOpacity>
         ) : (
           <View style={styles.fileBar}>

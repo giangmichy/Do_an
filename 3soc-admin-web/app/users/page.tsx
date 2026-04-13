@@ -20,6 +20,16 @@ import {
     PaginationNext,
     PaginationPrevious
 } from '@/components/ui/pagination';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 export default function UsersPage() {
     const { isAdmin } = useAuth();
@@ -39,6 +49,8 @@ export default function UsersPage() {
     const [totalPages, setTotalPages] = useState(0);
     const [totalUsers, setTotalUsers] = useState(0);
     const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [userToDelete, setUserToDelete] = useState<{id: number, username: string} | null>(null);
 
     useEffect(() => {
         loadUsers(page);
@@ -92,13 +104,22 @@ export default function UsersPage() {
         }
     };
 
-    const handleDelete = async (id: number) => {
-        if (!confirm('Are you sure you want to delete this user?')) return;
+    const handleDelete = async (id: number, username: string) => {
+        setUserToDelete({id, username});
+        setDeleteDialogOpen(true);
+    };
+
+    const confirmDelete = async () => {
+        if (!userToDelete) return;
+
         try {
-            await apiClient.deleteUser(id);
+            await apiClient.deleteUser(userToDelete.id);
+            setDeleteDialogOpen(false);
             loadUsers(page);
+            setError('');
         } catch (err: any) {
             setError(err.message || 'Failed to delete user');
+            setDeleteDialogOpen(false);
         }
     };
 
@@ -287,7 +308,7 @@ export default function UsersPage() {
                                                         <Edit size={14}/>
                                                     </Button>
                                                     <Button size="sm" variant="destructive"
-                                                            onClick={() => handleDelete(user.id)}>
+                                                            onClick={() => handleDelete(user.id, user.username)}>
                                                         <Trash2 size={14}/>
                                                     </Button>
                                                 </div>
@@ -364,6 +385,22 @@ export default function UsersPage() {
                         )}
                     </CardContent>
                 </Card>
+            <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Xác nhận xóa người dùng</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Bạn có chắc chắn muốn xóa người dùng <span className="font-semibold">{userToDelete?.username}</span>? Hành động này không thể hoàn tác.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Hủy</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
+                            Xóa
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
             </div>
         </div>
     );

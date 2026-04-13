@@ -7,8 +7,8 @@ import { TopBar } from '@/components/TopBar'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const _geist = Geist({ subsets: ["latin", "vietnamese"] });
+const _geistMono = Geist_Mono({ subsets: ["latin", "vietnamese"] });
 
 export const metadata: Metadata = {
   title: 'Detection Admin Dashboard',
@@ -41,7 +41,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`font-sans antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
+      <body className={`${_geist.className} antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
         <AuthProvider>
           <div className="flex flex-col min-h-screen">
             <TopBar />

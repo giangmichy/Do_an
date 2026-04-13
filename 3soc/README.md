@@ -567,7 +567,7 @@ t = 3100ms  →  phát hiện: [co3soc, vnmap]
 
 **Thuật toán:** JWT (JSON Web Token) — HS256
 **Mã hoá mật khẩu:** Argon2
-**Thời hạn token:** 7 ngày
+**Thời hạn token:** 1 ngày
 
 **JWT token chứa:**
 ```json

@@ -133,22 +133,6 @@ export default function FilesScreen() {
 
   useEffect(() => { loadFiles(page); }, [page, sortOrder]);
 
-  const handleDelete = (id: string) => {
-    Alert.alert('Xác nhận', 'Bạn có chắc muốn xóa file này?', [
-      { text: 'Hủy', style: 'cancel' },
-      {
-        text: 'Xóa', style: 'destructive',
-        onPress: async () => {
-          try {
-            await apiClient.deleteFile(id);
-            loadFiles(page);
-          } catch (err: any) {
-            Alert.alert('Lỗi', err.message);
-          }
-        },
-      },
-    ]);
-  };
 
   const handleDetect = async (fileId: string, fName: string, fileType: 'video' | 'image') => {
     setCurrentFileName(fName);
@@ -264,9 +248,6 @@ export default function FilesScreen() {
       <View style={styles.fileActions}>
         <TouchableOpacity style={styles.actionBtn} onPress={() => handleDetect(item.id, item.filename, item.type)}>
           <Ionicons name="scan-outline" size={18} color="#7c3aed" />
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(item.id)}>
-          <Ionicons name="trash-outline" size={18} color="#ef4444" />
         </TouchableOpacity>
       </View>
     </View>

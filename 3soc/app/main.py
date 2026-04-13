@@ -10,8 +10,9 @@ from app.routers.users import router as users_router
 from app.routers.files import router as files_router
 from app.db.db import init_db, SessionLocal
 from app.utils.auth import get_password_hash
-from app.utils.crypto import decrypt_bytes
+from app.utils.crypto import encrypt_bytes, decrypt_bytes
 from app.config import ENCRYPTION_KEY
+import base64
 from app.db.models import User
 from app.config import UPLOAD_DIR
 import base64
@@ -96,44 +97,49 @@ async def serve_upload(path: str):
     return Response(content=file_bytes, media_type=content_type)
 
 
+def _encrypt_email(email: str) -> str:
+    """Encrypt email using AES-256-GCM and encode with base64."""
+    return base64.b64encode(encrypt_bytes(email.encode(), ENCRYPTION_KEY)).decode()
+
+
 def seed_admin_if_missing():
     """Check if admin exists, if not create default users"""
     db = SessionLocal()
     try:
         # Check if admin user exists
         admin_exists = db.query(User).filter(User.username == "admin").first()
-        
+
         if admin_exists:
             print("[INFO] Admin user already exists")
             return
-        
+
         print("[INFO] Admin not found, creating default users...")
-        
-        # Create admin user
+
+        # Create admin user with encrypted email
         admin = User(
             username="admin",
-            email="admin@example.com",
+            email=_encrypt_email("admin@example.com"),
             password_hash=get_password_hash("admin123"),
             role="admin",
             is_active=True
         )
         db.add(admin)
-        
-        # Create regular user
+
+        # Create regular user with encrypted email
         user = User(
             username="user",
-            email="user@example.com",
+            email=_encrypt_email("user@example.com"),
             password_hash=get_password_hash("user123"),
             role="user",
             is_active=True
         )
         db.add(user)
-        
+
         db.commit()
         print("[INFO] ✓ Default users created successfully!")
         print("[INFO]   - Admin: admin / admin123")
         print("[INFO]   - User: user / user123")
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to seed admin user: {e}")
         db.rollback()

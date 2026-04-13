@@ -354,7 +354,7 @@ def detect_file_stream(
     file_id: str,
     authorization: Optional[str] = Header(None),
     token: Optional[str] = Query(None),
-    sample_ms: int = Query(50, ge=50, le=1000),
+    sample_ms: int = Query(100, ge=50, le=1000),
     cooldown_ms: int = Query(500, ge=0, le=5000),
     save_image_ms: int = Query(2000, ge=200, le=10000),
     db: Session = Depends(get_db),
@@ -362,7 +362,6 @@ def detect_file_stream(
     """Run detection on a video via SSE stream. Requires authentication.
     Token can be passed via Authorization header OR ?token= query param (for SSE).
     """
-    # SSE (EventSource) can't send custom headers, so allow token in query params
     auth_token = authorization or (f"Bearer {token}" if token else None)
     user_data = get_current_user_from_token(auth_token)
     user_id = user_data.get("user_id")

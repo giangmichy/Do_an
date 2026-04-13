@@ -18,9 +18,9 @@ skinparam sequenceArrowThickness 1.5
 skinparam roundcorner 6
 
 actor       "Người dùng"  as User
-participant "Màn hình\n(Frontend)"  as FE
-participant "Máy chủ\n(FastAPI)"    as BE
-database    "Cơ sở dữ liệu\n(MySQL)" as DB
+participant "Màn hình"  as FE
+participant "Hệ thống"    as BE
+database    "Cơ sở dữ liệu" as DB
 
 User -> FE : Nhập tài khoản + mật khẩu\nrồi nhấn "Đăng nhập"
 FE -> BE : Gửi yêu cầu POST /api/users/login\nkèm { username, password }
@@ -28,7 +28,7 @@ BE -> DB : Tìm user theo username
 
 alt Mật khẩu đúng
     DB --> BE : Tìm thấy user
-    BE -> BE : Kiểm tra mật khẩu (Argon2)\nTạo token đăng nhập (JWT, hết hạn 7 ngày)
+    BE -> BE : Kiểm tra mật khẩu (Argon2)\nTạo token đăng nhập (JWT, hết hạn 1 ngày)
     BE --> FE : Trả về 200 OK\n{ token, thông tin user }
     FE -> FE : Lưu token để dùng cho các lần sau
     FE --> User : Chuyển vào màn hình chính
@@ -100,10 +100,10 @@ end note
 
 
 ' ============================================================
-' SD03: PHÁT HIỆN VI PHẠM TRONG VIDEO (LẦN ĐẦU — CHẠY AI)
+' SD03: PHÁT HIỆN VI PHẠM TRỰC TIẾP
 ' ============================================================
 @startuml SD03_DetectVideo
-title SD03 — Upload video → Phát hiện vi phạm qua SSE (lần đầu chạy AI)
+title SD03 — Upload video → Phát hiện vi phạm trực tiếp
 
 skinparam sequenceMessageAlign center
 skinparam ParticipantPadding 20
@@ -124,7 +124,7 @@ collections "Thư mục\n(uploads)"    as Disk
 User -> FE : Chọn video
 FE -> BE : POST /api/files/upload\n(kèm video_id do app sinh)
 BE -> Disk : Lưu video → Mã hóa AES-256-GCM\n(.mp4.enc) → Xoá file gốc
-BE -> DB : Ghi nhận file đã upload\n(video_files table)
+BE -> DB : Ghi nhận file đã upload\n(bảng video_files)
 BE --> FE : Trả về 201 { id, filename, type='video' }
 
 ' ========== BƯỚC 2: BẮT ĐẦU DETECT ==========
@@ -144,11 +144,11 @@ BE --> FE : SSE event: 'init' (bắt đầu)\nSSE event: 'metadata' (tổng fram
 
 note over BE, AI
   Máy chủ dùng 2 luồng xử lý song song:
-  Luồng 1: Đọc frame từ video (theo sample_ms)
-  Luồng 2: Chạy AI → Gửi kết quả về Frontend qua SSE
+  Luồng 1: Đọc frame từ video
+  Luồng 2: Chạy AI → Gửi kết quả về FE qua SSE
 end note
 
-loop Với mỗi frame được lấy mẫu (mặc định 50ms/frame)
+loop Với mỗi frame được lấy mẫu
     BE -> AI : Chạy 3 model YOLO trên frame
     AI --> BE : Phát hiện: { bbox, nhãn, độ tin cậy }
     BE --> FE : SSE event: 'detection'\n(frame, timestamp, danh sách bbox)
@@ -160,7 +160,7 @@ loop Với mỗi frame được lấy mẫu (mặc định 50ms/frame)
           - Toàn cục: cách nhau 2000ms
         end note
         BE -> Disk : Lưu ảnh frame → Mã hóa (.jpg.enc)
-        BE -> DB : Ghi nhận vi phạm mới\n(violations table)
+        BE -> DB : Ghi nhận vi phạm mới\n(bảng violations)
         BE --> FE : SSE event: 'violation'\n(frame, timestamp, ảnh, bbox)
     end
 end
@@ -171,6 +171,47 @@ end
 BE -> Disk : Xoá file video tạm đã giải mã
 BE --> FE : SSE event: 'complete' { tổng số vi phạm }
 FE --> User : Hiển thị danh sách ảnh vi phạm\n+ Khung bbox đồng bộ khi xem lại video
+
+@enduml
+
+
+' ============================================================
+' SD04: Xem lại lịch sử quét
+' ============================================================
+@startuml SD04_ViewCachedVideo
+title SD04 — Xem lại kết quả phát hiện video
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng" as User
+participant "Màn hình"  as FE
+participant "Hệ thống"    as BE
+database    "Cơ sở dữ liệu" as DB
+collections "Thư mục\n(uploads)"    as Disk
+
+' ========== BƯỚC 1: CHỌN VIDEO ĐÃ QUA DETECT ==========
+== 1. Người dùng chọn video đã phát hiện trước đó ==
+
+User -> FE : Chọn video đã phát hiện từ danh sách
+FE -> BE : GET /api/files/{id}/detect-stream\n(kèm token đăng nhập)
+
+' ========== BƯỚC 2: LẤY KẾT QUẢ TỪ CSDL VÀ DISK ==========
+== 2. Lấy kết quả từ DB và disk (đã lưu từ lần detect trước) ==
+
+BE -> DB : Kiểm tra video này đã được phát hiện trước đó chưa?
+DB --> BE : Có, đã có vi phạm được lưu trong bảng violations
+BE -> DB : Lấy danh sách vi phạm đã lưu
+BE -> Disk : Lấy đường dẫn ảnh vi phạm đã lưu
+BE --> FE : Trả về dữ liệu phát hiện đã lưu (detections, violations, metadata)
+
+' ========== BƯỚC 3: HIỂN THỊ KẾT QUẢ ==========
+== 3. Hiển thị lại toàn bộ kết quả đã lưu ==
+
+FE --> User : Hiển thị video + khung vi phạm\n+ danh sách ảnh vi phạm đã lưu trước đó
 
 @enduml
 
@@ -188,9 +229,9 @@ skinparam sequenceArrowThickness 1.5
 skinparam roundcorner 6
 
 actor       "Người dùng" as User
-participant "Màn hình\n(Frontend)"  as FE
-participant "Máy chủ\n(FastAPI)"    as BE
-database    "Cơ sở dữ liệu\n(MySQL)" as DB
+participant "Màn hình"  as FE
+participant "Hệ thống"    as BE
+database    "Cơ sở dữ liệu" as DB
 collections "Thư mục\n(uploads)"    as Disk
 
 User -> FE : Nhấn "Xoá file"

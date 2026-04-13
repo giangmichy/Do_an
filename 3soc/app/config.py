@@ -33,7 +33,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:1234567890@localh
 # =========================
 SECRET_KEY = os.getenv("SECRET_KEY")
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+JWT_EXPIRE_MINUTES = 60 * 24 * 1  # 1 day
 
 # =========================
 # Password

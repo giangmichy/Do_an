@@ -18,6 +18,16 @@ import {
     PaginationPrevious
 } from '@/components/ui/pagination';
 import { useAuth } from '@/contexts/AuthContext';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 
 export default function FilesPage() {
@@ -34,6 +44,8 @@ export default function FilesPage() {
     const [totalPages, setTotalPages] = useState(0);
     const [totalFiles, setTotalFiles] = useState(0);
     const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [fileToDelete, setFileToDelete] = useState<{id: string, filename: string} | null>(null);
     const { isAdmin } = useAuth();
     useEffect(() => {
         loadFiles(page);
@@ -147,23 +159,23 @@ export default function FilesPage() {
         }
     };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm('Bạn có chắc chắn muốn xóa tệp này?')) return;
+    const handleDelete = async (id: string, filename: string) => {
+        setFileToDelete({id, filename});
+        setDeleteDialogOpen(true);
+    };
+
+    const confirmDelete = async () => {
+        if (!fileToDelete) return;
+
         try {
-            await apiClient.deleteFile(id);
-            toast({
-                title: 'Thành công',
-                description: 'Tệp đã được xóa'
-            });
+            await apiClient.deleteFile(fileToDelete.id);
+            setDeleteDialogOpen(false);
             loadFiles(page);
+            setError('');
         } catch (err: any) {
             const errorMsg = err.message || 'Failed to delete file';
             setError(errorMsg);
-            toast({
-                title: 'Lỗi',
-                description: errorMsg,
-                variant: 'destructive'
-            });
+            setDeleteDialogOpen(false);
         }
     };
 
@@ -281,7 +293,7 @@ export default function FilesPage() {
                                                     </Button>
                                                    {isAdmin && (
                                                     <Button size="sm" variant="destructive"
-                                                            onClick={() => handleDelete(file.id)}>
+                                                            onClick={() => handleDelete(file.id, file.filename)}>
                                                         <Trash2 size={14}/>
                                                     </Button>)}
                                                 </div>
@@ -366,6 +378,23 @@ export default function FilesPage() {
                 data={detectionResult}
                 fileName={currentFileName}
             />
+
+            <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Xác nhận xóa tệp</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Bạn có chắc chắn muốn xóa tệp <span className="font-semibold">{fileToDelete?.filename}</span>? Hành động này không thể hoàn tác.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Hủy</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
+                            Xóa
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }
