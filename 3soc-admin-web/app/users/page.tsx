@@ -11,6 +11,7 @@ import {apiClient, User, UserCreate, UserUpdate, SortOrder} from '@/app/api';
 import {Users, Plus, Edit, Trash2, Shield} from 'lucide-react';
 import {Alert, AlertDescription} from '@/components/ui/alert';
 import {useAuth} from '@/contexts/AuthContext';
+import {escapeHtml} from '@/lib/escapeHtml';
 import {
     Pagination,
     PaginationContent,
@@ -261,8 +262,8 @@ export default function UsersPage() {
                                     {users.map((user, index) => (
                                         <tr key={user.id} className="border-b hover:bg-muted/50">
                                             <td className="p-4">{(page - 1) * pageSize + index + 1}</td>
-                                            <td className="p-4 font-medium">{user.username}</td>
-                                            <td className="p-4">{user.email}</td>
+                                            <td className="p-4 font-medium">{escapeHtml(user.username)}</td>
+                                            <td className="p-4">{escapeHtml(user.email)}</td>
                                             <td className="p-4">
                           <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs ${
                               user.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'

@@ -5,6 +5,7 @@ import {Button} from '@/components/ui/button';
 import {CanvasOverlay} from '@/components/CanvasOverlay';
 import {apiClient} from '@/app/api';
 import {drawBoundingBoxes} from '@/lib/imageUtils';
+import {escapeHtml} from '@/lib/escapeHtml';
 import {Activity, Play, Pause, Upload, Scan, Image as ImageIcon, Video as VideoIcon} from 'lucide-react';
 import {BoundingBox, useRealtimeDetection} from '@/hooks/useRealtimeDetection';
 import {useViolationSSE} from '@/hooks/useViolationSSE';
@@ -226,7 +227,7 @@ export default function Home() {
                                 {selectedFile && (
                                     <div className="p-3 bg-slate-100 rounded-lg flex items-center gap-3">
                                         {mediaType === 'image' ? <ImageIcon size={18}/> : <VideoIcon size={18}/>}
-                                        <span className="text-xs font-medium truncate flex-1">{selectedFile.name}</span>
+                                        <span className="text-xs font-medium truncate flex-1">{escapeHtml(selectedFile.name)}</span>
                                     </div>
                                 )}
 

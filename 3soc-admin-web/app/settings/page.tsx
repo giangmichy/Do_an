@@ -9,6 +9,7 @@ import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {User, Lock, Settings, LogOut, Users} from 'lucide-react';
 import {useRouter} from 'next/navigation';
 import {useToast} from '@/hooks/use-toast';
+import {escapeHtml} from '@/lib/escapeHtml';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 

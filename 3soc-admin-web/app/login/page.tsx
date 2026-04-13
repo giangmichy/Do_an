@@ -10,6 +10,7 @@ import {Alert, AlertDescription} from '@/components/ui/alert';
 import {LogIn, Zap} from 'lucide-react';
 import {useToast} from '@/hooks/use-toast';
 import {useAuth} from '@/contexts/AuthContext';
+import {escapeHtml} from '@/lib/escapeHtml';
 
 export default function LoginPage() {
     const router = useRouter();
@@ -39,7 +40,7 @@ export default function LoginPage() {
 
             toast({
                 title: 'Thành công',
-                description: `Chào mừng ${username}!`
+                description: `Chào mừng ${escapeHtml(username)}!`
             });
 
             // Redirect to home/detection page

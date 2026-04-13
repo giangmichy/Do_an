@@ -9,6 +9,7 @@ import {Alert, AlertDescription} from '@/components/ui/alert';
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {useToast} from '@/hooks/use-toast';
 import DetectionModal from '@/components/DetectionModal';
+import { escapeHtml } from '@/lib/escapeHtml';
 import {
     Pagination,
     PaginationContent,
@@ -249,13 +250,13 @@ export default function FilesPage() {
                                             <td className="p-4">
                                                 <div className="flex items-center gap-2">
                                                     <FileVideo size={16} className="text-muted-foreground"/>
-                                                    <span className="font-medium">{file.filename}</span>
+                                                    <span className="font-medium">{escapeHtml(file.filename)}</span>
                                                 </div>
                                             </td>
                                             <td className="p-4 text-sm text-muted-foreground">{formatFileSize(file.file_size)}</td>
                                             <td className="p-4 text-sm text-muted-foreground">{formatDuration(file.duration)}</td>
                                             <td className="p-4 text-sm font-medium">
-                                                {file.owner ? file.owner.username : 'N/A'}
+                                                {file.owner ? escapeHtml(file.owner.username) : 'N/A'}
                                             </td>
                                             <td className="p-4 text-sm text-muted-foreground">{formatDate(file.created_at)}</td>
                                             <td className="p-4">

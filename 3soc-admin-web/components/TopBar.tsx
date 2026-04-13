@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
+import { escapeHtml } from '@/lib/escapeHtml';
 import './topbar.css';
 
 export function TopBar() {

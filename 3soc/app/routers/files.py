@@ -12,6 +12,7 @@ from uuid import uuid4
 import cv2
 import json
 from urllib.parse import unquote
+import re
 from app.db.db import SessionLocal
 from app.db.models import VideoFile, Violation
 from app.schemas.file import VideoFileResponse, VideoFileListResponse
@@ -21,6 +22,15 @@ from app.utils.crypto import encrypt_file, decrypt_file_to_temp
 from app.config import ENCRYPTION_KEY
 from app.config import UPLOAD_DIR, MAX_VIDEO_SIZE, MAX_IMAGE_SIZE
 router = APIRouter(prefix="/files", tags=["files"])
+
+DANGEROUS_FILENAME_PATTERN = re.compile(r'[<>&"\'/\\;`$!#%\^*\=\+@{}()\[\]~]')
+
+def sanitize_filename(filename: str) -> str:
+    """Remove potentially dangerous characters from filenames to prevent XSS."""
+    cleaned = re.sub(r'<[^>]*>', '', filename)
+    cleaned = DANGEROUS_FILENAME_PATTERN.sub('', cleaned)
+    cleaned = cleaned[:255]
+    return cleaned.strip()
 
 
 def _resolve_physical_video_path(file: VideoFile) -> Optional[Path]:
@@ -87,7 +97,7 @@ async def upload_file(
     # file_ext = Path(file.filename).suffix
     # unique_filename = f"{timestamp}_{file.filename}"
     # Decode URL-encoded filename (e.g. %20 → space, %E1%BB%9D → ờ)
-    safe_filename = unquote(file.filename or '')
+    safe_filename = sanitize_filename(unquote(file.filename or ''))
     file_ext = Path(safe_filename).suffix  # Get the extension, e.g. .mp4, .mov...
 
     # Ensure upload directory exists
@@ -688,7 +698,7 @@ async def detect_image(
     # Save the uploaded image to a temporary location
     temp_dir = UPLOAD_DIR / "temp"
     temp_dir.mkdir(exist_ok=True)
-    temp_image_path = temp_dir / f"{uuid4()}_{unquote(file.filename or 'image')}"
+    temp_image_path = temp_dir / f"{uuid4()}_{sanitize_filename(unquote(file.filename or 'image'))}"
     
     try:
         with temp_image_path.open("wb") as buffer:

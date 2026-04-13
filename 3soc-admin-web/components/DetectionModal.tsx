@@ -5,6 +5,7 @@ import {DetectionResponse, DetectionBox} from '@/app/api';
 
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {X} from 'lucide-react';
+import {escapeHtml} from '@/lib/escapeHtml';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
 const BACKEND_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '');
@@ -47,7 +48,7 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
             <Dialog open={open} onOpenChange={onOpenChange}>
                 <DialogContent className="w-[70vw] h-[85vh] max-w-none sm:max-w-none p-0 flex flex-col">
                     <DialogHeader className="shrink-0 border-b pb-4 px-6 pt-6">
-                        <DialogTitle>Kết quả phát hiện ({fileName || '—'})</DialogTitle>
+                        <DialogTitle>Kết quả phát hiện ({escapeHtml(fileName) || '\u2014'})</DialogTitle>
                     </DialogHeader>
                     <div className="overflow-y-auto flex-1 px-6 py-4">
                         {data ? (
