@@ -457,7 +457,7 @@ export default function DetectionScreen() {
             <View style={styles.sectionTitleRow}>
               <Text style={styles.sectionTitle}>Vi phạm phát hiện</Text>
               <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{violationFrames.length} frames</Text>
+                <Text style={styles.countBadgeText}>{violationFrames.length} ảnh</Text>
               </View>
             </View>
             {violationFrames.length > 0 ? (
@@ -482,7 +482,7 @@ export default function DetectionScreen() {
             ) : (
               <View style={styles.emptyState}>
                 <Ionicons name="shield-outline" size={32} color="#cbd5e1" />
-                <Text style={styles.emptyText}>Chưa có dữ liệu vi phạm</Text>
+                <Text style={styles.emptyText}>Không có dữ liệu</Text>
               </View>
             )}
           </View>

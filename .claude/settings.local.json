@@ -4,7 +4,9 @@
       "Read(//mnt/c/Users/Admin/Desktop/Do_an/**)",
       "Bash(python -c \"from app.utils.crypto import encrypt_bytes, decrypt_bytes, encrypt_file, decrypt_file_to_temp; print\\('Crypto module OK'\\)\")",
       "Bash(python -m pip show cryptography)",
-      "Bash(python -c \"import base64, os; print\\(base64.b64encode\\(os.urandom\\(32\\)\\).decode\\(\\)\\)\")"
+      "Bash(python -c \"import base64, os; print\\(base64.b64encode\\(os.urandom\\(32\\)\\).decode\\(\\)\\)\")",
+      "Bash(xargs grep:*)",
+      "Bash(ls:*)"
     ]
   }
 }

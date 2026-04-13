@@ -47,7 +47,7 @@ export default function LoginScreen() {
             <Ionicons name="shield-checkmark" size={48} color="#7c3aed" />
           </View>
           <Text style={styles.title}>3SOC Detection</Text>
-          <Text style={styles.subtitle}>Hệ thống phát hiện vi phạm AI</Text>
+          <Text style={styles.subtitle}>Hệ thống phát hiện vi phạm</Text>
         </View>
 
         {/* Form */}

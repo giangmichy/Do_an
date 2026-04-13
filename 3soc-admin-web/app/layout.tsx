@@ -11,8 +11,8 @@ const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: 'AI Detection Admin Dashboard',
-  description: 'Real-time video analysis and AI model monitoring dashboard. Upload videos, detect objects, and monitor system performance.',
+  title: 'Detection Admin Dashboard',
+  description: '',
   generator: 'v0.app',
   icons: {
     icon: [

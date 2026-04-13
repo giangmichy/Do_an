@@ -1,0 +1,372 @@
+' ============================================================
+' 3SOC — SEQUENCE DIAGRAMS (VIẾT LẠI CHO QA / TESTER)
+' Ngôn ngữ đơn giản, tập trung vào LUỒNG NGHIỆP VỤ
+' Tool xem: https://www.plantuml.com/plantuml/uml/
+' ============================================================
+
+
+' ============================================================
+' SD01: ĐĂNG NHẬP
+' ============================================================
+@startuml SD01_DangNhap
+title SD01 — Đăng nhập vào hệ thống
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng"  as User
+participant "Màn hình\n(Frontend)"  as FE
+participant "Máy chủ\n(FastAPI)"    as BE
+database    "Cơ sở dữ liệu\n(MySQL)" as DB
+
+User -> FE : Nhập tài khoản + mật khẩu\nrồi nhấn "Đăng nhập"
+FE -> BE : Gửi yêu cầu POST /api/users/login\nkèm { username, password }
+BE -> DB : Tìm user theo username
+
+alt Mật khẩu đúng
+    DB --> BE : Tìm thấy user
+    BE -> BE : Kiểm tra mật khẩu (Argon2)\nTạo token đăng nhập (JWT, hết hạn 7 ngày)
+    BE --> FE : Trả về 200 OK\n{ token, thông tin user }
+    FE -> FE : Lưu token để dùng cho các lần sau
+    FE --> User : Chuyển vào màn hình chính
+else Mật khẩu sai
+    DB --> BE : Tìm thấy user (hoặc không)
+    BE -> BE : Kiểm tra mật khẩu → SAI
+    BE --> FE : Trả về 401\n"Thông tin tài khoản hoặc mật khẩu không đúng"
+    FE --> User : Hiển thị lỗi chung\n(Không nói rõ sai tài khoản hay mật khẩu)
+end
+
+note over BE
+  Bảo vệ chống brute-force:
+  Tối đa 5 lần thử / phút / IP
+end note
+
+@enduml
+
+
+' ============================================================
+' SD02: PHÁT HIỆN VI PHẠM TRONG ẢNH TĨNH
+' ============================================================
+@startuml SD02_DetectAnh
+title SD02 — Upload ảnh → Phát hiện vi phạm (trả ngay lập tức)
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng" as User
+participant "Màn hình\n(Frontend)"  as FE
+participant "Máy chủ\n(FastAPI)"    as BE
+participant "AI Model\n(YOLO)"     as AI
+collections "Thư mục tạm\n(uploads/temp)" as Disk
+
+note over BE, AI
+  3 model AI chạy cùng lúc trên 1 ảnh:
+  - co3soc.pt     → Cờ 3 sọc
+  - duongluoibo.pt → Đường lưỡi bò
+  - vnmap.pt      → Bản đồ VN sai
+end note
+
+User -> FE : Chọn ảnh từ thư viện
+FE -> BE : Gửi ảnh lên (POST /api/files/detect-image)
+BE -> Disk : Lưu ảnh tạm
+BE -> AI : Chạy 3 model AI trên ảnh
+AI --> BE : Trả về danh sách phát hiện\n{ vị trí bbox, nhãn, độ tin cậy }
+BE -> Disk : Xoá ảnh tạm
+
+alt Tìm thấy vi phạm
+    BE --> FE : Trả về danh sách detections
+    FE --> User : Vẽ khung đỏ/xanh quanh vùng vi phạm\nHiển thị tên vi phạm + % tin cậy
+else Không có vi phạm
+    BE --> FE : Danh sách rỗng
+    FE --> User : Thông báo "Không phát hiện vi phạm"
+end
+
+note over BE, Disk
+  Ảnh đơn KHÔNG lưu vào database.
+  Chỉ dùng để detect rồi xoá ngay.
+end note
+
+@enduml
+
+
+' ============================================================
+' SD03: PHÁT HIỆN VI PHẠM TRONG VIDEO (LẦN ĐẦU — CHẠY AI)
+' ============================================================
+@startuml SD03_DetectVideo
+title SD03 — Upload video → Phát hiện vi phạm qua SSE (lần đầu chạy AI)
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng" as User
+participant "Màn hình\n(Frontend)"  as FE
+participant "Máy chủ\n(FastAPI)"    as BE
+participant "AI Model\n(YOLO)"     as AI
+database    "Cơ sở dữ liệu\n(MySQL)" as DB
+collections "Thư mục\n(uploads)"    as Disk
+
+' ========== BƯỚC 1: UPLOAD ==========
+== 1. Upload video lên server ==
+
+User -> FE : Chọn video
+FE -> BE : POST /api/files/upload\n(kèm video_id do app sinh)
+BE -> Disk : Lưu video → Mã hóa AES-256-GCM\n(.mp4.enc) → Xoá file gốc
+BE -> DB : Ghi nhận file đã upload\n(video_files table)
+BE --> FE : Trả về 201 { id, filename, status }
+
+' ========== BƯỚC 2: BẮT ĐẦU DETECT ==========
+== 2. Bắt đầu phát hiện vi phạm ==
+
+User -> FE : Nhấn "Bắt đầu phát hiện"
+FE -> BE : GET /api/files/{id}/detect-stream\n(SSE — Server-Sent Events)
+BE -> DB : Kiểm tra video có sẵn kết quả chưa?
+
+DB --> BE : CHƯA có → Phải chạy AI mới
+
+BE -> Disk : Giải mã .enc → file tạm
+BE --> FE : SSE event: 'init' (bắt đầu)\nSSE event: 'metadata' (tổng frame, fps)
+BE -> DB : Cập nhật status = 'processing'
+
+' ========== BƯỚC 3: AI QUÉT TỪNG FRAME ==========
+== 3. AI quét từng frame video (gửi kết quả realtime) ==
+
+note over BE, AI
+  Máy chủ dùng 2 luồng xử lý song song:
+  Luồng 1: Đọc frame từ video (theo sample_ms)
+  Luồng 2: Chạy AI → Gửi kết quả về Frontend qua SSE
+end note
+
+loop Với mỗi frame được lấy mẫu (mặc định 50ms/frame)
+    BE -> AI : Chạy 3 model YOLO trên frame
+    AI --> BE : Phát hiện: { bbox, nhãn, độ tin cậy }
+    BE --> FE : SSE event: 'detection'\n(frame, timestamp, danh sách bbox)
+
+    alt Phát hiện vi phạm MỚI (thoả cooldown)
+        note over BE
+          Cooldown 2 lớp để tránh lưu trùng:
+          - Mỗi nhãn: cách nhau 500ms
+          - Toàn cục: cách nhau 2000ms
+        end note
+        BE -> Disk : Lưu ảnh frame → Mã hóa (.jpg.enc)
+        BE -> DB : Ghi nhận vi phạm mới\n(violations table)
+        BE --> FE : SSE event: 'violation'\n(frame, timestamp, ảnh, bbox)
+    end
+end
+
+' ========== BƯỚC 4: HOÀN TẤT ==========
+== 4. Hoàn tất ==
+
+BE -> DB : Cập nhật status = 'completed'
+BE -> Disk : Xoá file video tạm đã giải mã
+BE --> FE : SSE event: 'complete' { tổng số vi phạm }
+FE --> User : Hiển thị danh sách ảnh vi phạm\n+ Khung bbox đồng bộ khi xem lại video
+
+@enduml
+
+
+' ============================================================
+' SD04: XEM LẠI KẾT QUẢ VIDEO (CACHE HIT — KHÔNG CHẠY AI)
+' ============================================================
+@startuml SD04_CacheHit
+title SD04 — Xem lại video đã detect (lấy kết quả từ cache)
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng" as User
+participant "Màn hình\n(Frontend)"  as FE
+participant "Máy chủ\n(FastAPI)"    as BE
+database    "Cơ sở dữ liệu\n(MySQL)" as DB
+
+User -> FE : Mở video đã từng detect
+FE -> BE : GET /api/files/{id}/detect-stream\n(giống lần đầu)
+BE -> DB : Kiểm tra video có sẵn kết quả chưa?
+
+DB --> BE : ĐÃ CÓ violations (cache hit)
+
+note over BE
+  Không cần chạy AI lại!
+  Không cần giải mã video!
+  Đọc thẳng kết quả từ DB → Gửi về nhanh
+end note
+
+BE --> FE : SSE event: 'init'
+BE --> FE : SSE event: 'metadata'
+
+loop Với mỗi vi phạm đã lưu trong DB
+    BE --> FE : SSE event: 'violation'\n(frame, timestamp, ảnh, bbox)
+end
+
+BE --> FE : SSE event: 'complete'
+FE --> User : Hiển thị kết quả ngay lập tức\n(không phải chờ AI xử lý)
+
+@enduml
+
+
+' ============================================================
+' SD05: XOÁ VIDEO
+' ============================================================
+@startuml SD05_XoaVideo
+title SD05 — Xoá video (và toàn bộ kết quả liên quan)
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng" as User
+participant "Màn hình\n(Frontend)"  as FE
+participant "Máy chủ\n(FastAPI)"    as BE
+database    "Cơ sở dữ liệu\n(MySQL)" as DB
+collections "Thư mục\n(uploads)"    as Disk
+
+User -> FE : Nhấn "Xoá video"
+FE -> FE : Hiện hộp thoại xác nhận
+User -> FE : Xác nhận xoá
+FE -> BE : DELETE /api/files/{id}\n(kèm token đăng nhập)
+BE -> DB : Tìm video theo id
+
+alt Video không tồn tại
+    DB --> BE : Không tìm thấy
+    BE --> FE : Trả về 404 Not Found
+    FE --> User : "Không tìm thấy video"
+else Video tồn tại nhưng KHÔNG thuộc về user này
+    DB --> BE : Tìm thấy nhưng user_id khác
+    BE --> FE : Trả về 403 Forbidden
+    FE --> User : "Bạn không có quyền xoá video này"
+else Video thuộc về user (hoặc admin xoá)
+    DB --> BE : Tìm thấy, đúng chủ
+
+    BE -> Disk : Xoá file video (.enc hoặc .mp4)
+    BE -> Disk : Xoá thư mục ảnh vi phạm\n(violations/{id}/*.jpg.enc)
+    BE -> DB : Xoá record video_files
+    note over DB
+      CASCADE DELETE:
+      Tự động xoá tất cả vi phạm
+      liên quan đến video này
+    end note
+    DB -> DB : Xoá records trong violations
+
+    BE --> FE : Trả về 204 No Content
+    FE -> FE : Xoá video khỏi danh sách
+    FE --> User : "Xoá thành công"
+end
+
+@enduml
+
+
+' ============================================================
+' SD06: ADMIN QUẢN LÝ TÀI KHOẢN
+' ============================================================
+@startuml SD06_QuanLyTaiKhoan
+title SD06 — Admin quản lý tài khoản người dùng
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Admin"      as Admin
+participant "Trang Admin\n(Frontend)" as FE
+participant "Máy chủ\n(FastAPI)"     as BE
+database    "Cơ sở dữ liệu\n(MySQL)"  as DB
+
+note over Admin, BE
+  Tất cả yêu cầu đều kèm token.
+  BE kiểm tra role == "admin" trước khi thực hiện.
+end note
+
+' --- DANH SÁCH ---
+== 1. Xem danh sách người dùng (có phân trang) ==
+
+Admin -> FE : Mở trang "Quản lý người dùng"
+FE -> BE : GET /api/users?page=1&page_size=10
+BE -> BE : Kiểm tra token → Đúng là admin
+BE -> DB : Lấy danh sách users (mới nhất trước)\nGiới hạn 10 user / trang
+DB --> BE : Trả về danh sách user
+BE --> FE : { users[], tổng số, trang hiện tại }
+FE --> Admin : Hiển thị bảng user có phân trang
+
+' --- TẠO ---
+== 2. Tạo tài khoản mới ==
+
+Admin -> FE : Nhập { username, email, password, role }
+FE -> BE : POST /api/users/register
+BE -> DB : Kiểm tra username/email đã tồn tại chưa
+DB --> BE : Chưa tồn tại → OK
+BE -> BE : Mã hóa mật khẩu (Argon2)\nMã hóa email (AES-256-GCM)
+BE -> DB : INSERT user mới vào DB
+BE --> FE : Trả về 201 { user }
+FE --> Admin : "Tạo tài khoản thành công"
+
+' --- SỬA ---
+== 3. Chỉnh sửa thông tin user ==
+
+Admin -> FE : Chọn user → Sửa → Thay đổi thông tin
+FE -> BE : PUT /api/users/{id}\n{ username?, email?, role?, is_active? }
+BE -> BE : Kiểm tra token → Đúng admin
+BE -> DB : UPDATE user theo id
+DB --> BE : Cập nhật thành công
+BE --> FE : Trả về 200 { user }
+FE --> Admin : Cập nhật giao diện
+
+' --- XOÁ ---
+== 4. Xoá tài khoản ==
+
+Admin -> FE : Chọn user → Xoá → Xác nhận
+FE -> BE : DELETE /api/users/{id}
+BE -> BE : Kiểm tra token → Đúng admin
+BE -> DB : DELETE user theo id
+BE --> FE : Trả về 204 No Content
+FE -> FE : Xoá user khỏi bảng
+FE --> Admin : "Xoá tài khoản thành công"
+
+@enduml
+
+
+' ============================================================
+' SD07: ĐĂNG XUẤT
+' ============================================================
+@startuml SD07_DangXuat
+title SD07 — Đăng xuất khỏi hệ thống
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "Người dùng"  as User
+participant "Màn hình\n(Frontend)"  as FE
+participant "Máy chủ\n(FastAPI)"    as BE
+
+User -> FE : Nhấn "Đăng xuất"
+FE -> BE : POST /api/users/logout\n(kèm token)
+
+note over BE
+  JWT là stateless — server KHÔNG lưu session.
+  Endpoint chỉ xác thực token còn hợp lệ,
+  KHÔNG thu hồi (invalidate) token phía server.
+  Token vẫn dùng được đến khi hết hạn (7 ngày).
+end note
+
+BE -> BE : Kiểm tra token hợp lệ
+BE --> FE : Trả về 200 { "Logged out successfully" }
+FE -> FE : Xoá token khỏi bộ nhớ máy
+FE --> User : Chuyển về màn hình đăng nhập
+
+@enduml

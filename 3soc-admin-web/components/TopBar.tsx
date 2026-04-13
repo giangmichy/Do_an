@@ -59,7 +59,7 @@ export function TopBar() {
                     <div className="p-2 bg-primary rounded-lg">
                         <Activity className="text-white" size={24}/>
                     </div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-800">AI Detection System</h1>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-800">Detection System</h1>
                 </div>
             </Link>
 
@@ -99,7 +99,7 @@ export function TopBar() {
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/20 transition-colors group">
                   <Avatar className="h-8 w-8 border-2 border-white shadow-md">
-                    <AvatarImage src="" alt={userName} />
+                    <AvatarImage src="" />
                     <AvatarFallback className="bg-gray-300 text-gray-700 font-medium">
                       {userInitials}
                     </AvatarFallback>

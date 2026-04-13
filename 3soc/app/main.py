@@ -67,10 +67,14 @@ app.include_router(files_router, prefix="/api")
 # Encrypted files (.enc) are decrypted on-the-fly before serving
 @app.get("/uploads/{path:path}")
 async def serve_upload(path: str):
-    """Serve uploaded files, decrypting .enc files on the fly."""
     file_path = UPLOAD_DIR / path
+    # Fallback: try .enc if the plaintext file doesn't exist
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+        enc_path = file_path.with_suffix(file_path.suffix + ".enc")
+        if enc_path.exists() and enc_path.is_file():
+            file_path = enc_path
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
 
     file_bytes = file_path.read_bytes()
 

@@ -1,7 +1,7 @@
 # 3SOC Detection — Mobile App
 
 > **Frontend Mobile** — React Native (Expo) + TypeScript
-> Phát hiện vi phạm chủ quyền (Cờ 3 sọc, Đường lưỡi bò, Bản đồ sai) trong ảnh và video thông qua backend AI.
+> Phát hiện vi phạm chủ quyền (Cờ 3 sọc, Đường lưỡi bò, Bản đồ sai) trong ảnh và video thông qua backend.
 
 ---
 
