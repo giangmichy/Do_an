@@ -188,7 +188,7 @@ export default function UsersPage() {
                                 </DialogHeader>
                                 <form onSubmit={handleSubmit} className="space-y-4">
                                     <div>
-                                        <Label htmlFor="username">Username</Label>
+                                        <Label htmlFor="username" className='py-2'>Tên đăng nhập</Label>
                                         <Input
                                             id="username"
                                             value={formData.username}
@@ -197,7 +197,7 @@ export default function UsersPage() {
                                         />
                                     </div>
                                     <div>
-                                        <Label htmlFor="email">Email</Label>
+                                        <Label htmlFor="email" className='py-2'>Email</Label>
                                         <Input
                                             id="email"
                                             type="email"
@@ -208,7 +208,7 @@ export default function UsersPage() {
                                     </div>
                                     <div>
                                         <Label
-                                            htmlFor="password">Password {editingUser && '(leave blank to keep current)'}</Label>
+                                            htmlFor="password" className='py-2'>Mật khẩu</Label>
                                         <Input
                                             id="password"
                                             type="password"
@@ -218,7 +218,7 @@ export default function UsersPage() {
                                         />
                                     </div>
                                     <div>
-                                        <Label htmlFor="role">Role</Label>
+                                        <Label htmlFor="role" className='py-2'>Vai trò</Label>
                                         <select
                                             id="role"
                                             value={formData.role}
@@ -231,9 +231,9 @@ export default function UsersPage() {
                                     </div>
                                     <div className="flex gap-2 justify-end">
                                         <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                                            Cancel
+                                            Hủy
                                         </Button>
-                                        <Button type="submit">{editingUser ? 'Update' : 'Create'}</Button>
+                                        <Button type="submit">Lưu</Button>
                                     </div>
                                 </form>
                             </DialogContent>

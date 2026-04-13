@@ -176,48 +176,6 @@ FE --> User : Hiển thị danh sách ảnh vi phạm\n+ Khung bbox đồng bộ
 
 
 ' ============================================================
-' SD04: XEM LẠI KẾT QUẢ VIDEO (CACHE HIT — KHÔNG CHẠY AI)
-' ============================================================
-@startuml SD04_CacheHit
-title SD04 — Xem lại video đã detect (lấy kết quả từ cache)
-
-skinparam sequenceMessageAlign center
-skinparam ParticipantPadding 20
-skinparam BoxPadding 10
-skinparam sequenceArrowThickness 1.5
-skinparam roundcorner 6
-
-actor       "Người dùng" as User
-participant "Màn hình\n(Frontend)"  as FE
-participant "Máy chủ\n(FastAPI)"    as BE
-database    "Cơ sở dữ liệu\n(MySQL)" as DB
-
-User -> FE : Mở video đã từng detect
-FE -> BE : GET /api/files/{id}/detect-stream\n(giống lần đầu)
-BE -> DB : Kiểm tra video có sẵn kết quả chưa?
-
-DB --> BE : ĐÃ CÓ violations (cache hit)
-
-note over BE
-  Không cần chạy AI lại!
-  Không cần giải mã video!
-  Đọc thẳng kết quả từ DB → Gửi về nhanh
-end note
-
-BE --> FE : SSE event: 'init'
-BE --> FE : SSE event: 'metadata'
-
-loop Với mỗi vi phạm đã lưu trong DB
-    BE --> FE : SSE event: 'violation'\n(frame, timestamp, ảnh, bbox)
-end
-
-BE --> FE : SSE event: 'complete'
-FE --> User : Hiển thị kết quả ngay lập tức\n(không phải chờ AI xử lý)
-
-@enduml
-
-
-' ============================================================
 ' SD05: XOÁ VIDEO
 ' ============================================================
 @startuml SD05_XoaVideo
@@ -336,39 +294,5 @@ BE -> DB : DELETE user theo id
 BE --> FE : Trả về 204 No Content
 FE -> FE : Xoá user khỏi bảng
 FE --> Admin : "Xoá tài khoản thành công"
-
-@enduml
-
-
-' ============================================================
-' SD07: ĐĂNG XUẤT
-' ============================================================
-@startuml SD07_DangXuat
-title SD07 — Đăng xuất khỏi hệ thống
-
-skinparam sequenceMessageAlign center
-skinparam ParticipantPadding 20
-skinparam BoxPadding 10
-skinparam sequenceArrowThickness 1.5
-skinparam roundcorner 6
-
-actor       "Người dùng"  as User
-participant "Màn hình\n(Frontend)"  as FE
-participant "Máy chủ\n(FastAPI)"    as BE
-
-User -> FE : Nhấn "Đăng xuất"
-FE -> BE : POST /api/users/logout\n(kèm token)
-
-note over BE
-  JWT là stateless — server KHÔNG lưu session.
-  Endpoint chỉ xác thực token còn hợp lệ,
-  KHÔNG thu hồi (invalidate) token phía server.
-  Token vẫn dùng được đến khi hết hạn (7 ngày).
-end note
-
-BE -> BE : Kiểm tra token hợp lệ
-BE --> FE : Trả về 200 { "Logged out successfully" }
-FE -> FE : Xoá token khỏi bộ nhớ máy
-FE --> User : Chuyển về màn hình đăng nhập
 
 @enduml

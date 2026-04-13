@@ -213,7 +213,7 @@ export default function FilesPage() {
                         <FileVideo className="text-primary" size={32}/>
                         <h1 className="text-3xl font-bold">Quản lý file</h1>
                     </div>
-                    <p className="text-muted-foreground">Manage uploaded video files</p>
+                    <p className="text-muted-foreground">Danh sách file đã tải lên</p>
                 </div>
 
                 {error && (

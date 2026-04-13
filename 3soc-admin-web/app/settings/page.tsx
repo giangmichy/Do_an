@@ -253,10 +253,9 @@ export default function SettingsPage() {
 
                 {/* Tabs */}
                 <Tabs defaultValue="account" className="space-y-6">
-                    <TabsList className={`grid w-full ${user?.role === 'admin' ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                    <TabsList className= 'grid w-full grid-cols-2'>
                         <TabsTrigger value="account">Tài khoản</TabsTrigger>
                         <TabsTrigger value="password">Mật khẩu</TabsTrigger>
-                        {user?.role === 'admin' && <TabsTrigger value="system">Hệ thống</TabsTrigger>}
                     </TabsList>
 
                     {/* Account Tab */}
@@ -385,87 +384,6 @@ export default function SettingsPage() {
                             </CardContent>
                         </Card>
                     </TabsContent>
-
-                    {/* Admin Management Tab */}
-                    {user?.role === 'admin' && (
-                        <TabsContent value="admin">
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2">
-                                        <Users size={20}/>
-                                        Quản lý hệ thống
-                                    </CardTitle>
-                                </CardHeader>
-                            </Card>
-                        </TabsContent>
-                    )}
-
-                    {/* System Settings Tab */}
-                    {user?.role === 'admin' && (
-                        <TabsContent value="system">
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2">
-                                        <Settings size={20}/>
-                                        Cài đặt hệ thống
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent className="space-y-6">
-                                    {/* Detection FPS */}
-                                    <div>
-                                        <label className="text-sm font-semibold mb-2 block">Tốc độ trích xuất frame
-                                            (ms)</label>
-                                        <p className="text-xs text-muted-foreground mb-3">
-                                            Thời gian giữa mỗi frame. Giá trị nhỏ = chi tiết hơn nhưng chậm hơn
-                                        </p>
-                                        <div className="flex gap-2 items-center">
-                                            <Input
-                                                type="number"
-                                                min="150"
-                                                max="500"
-                                                step="10"
-                                                value={settings.detectionFps}
-                                                onChange={(e) => handleSettingsChange('detectionFps', parseInt(e.target.value))}
-                                                className="w-32"
-                                            />
-                                            <span className="text-sm text-muted-foreground">
-                        ≈ {(1000 / settings.detectionFps).toFixed(1)} fps
-                      </span>
-                                        </div>
-                                    </div>
-
-                                    {/* Theme */}
-                                    <div>
-                                        <label className="text-sm font-semibold mb-2 block">Giao diện</label>
-                                        <div className="flex gap-3">
-                                            <Button
-                                                variant={settings.theme === 'light' ? 'default' : 'outline'}
-                                                onClick={() => handleSettingsChange('theme', 'light')}
-                                            >
-                                                Sáng
-                                            </Button>
-                                            <Button
-                                                variant={settings.theme === 'dark' ? 'default' : 'outline'}
-                                                onClick={() => handleSettingsChange('theme', 'dark')}
-                                            >
-                                                Tối
-                                            </Button>
-                                        </div>
-                                    </div>
-
-                                    {/* Info */}
-                                    <div className="pt-6 border-t">
-                                        <h3 className="text-sm font-semibold mb-3">Thông tin ứng dụng</h3>
-                                        <div className="space-y-2 text-sm text-muted-foreground">
-                                            <p>Phiên bản: 1.0.0</p>
-                                            <p>Backend: FastAPI</p>
-                                            <p>Frontend: Next.js 16</p>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </TabsContent>
-                    )}
                 </Tabs>
             </div>
         </div>

@@ -43,7 +43,7 @@ function MainTabs() {
         headerTitleStyle: { fontWeight: '600' },
       })}
     >
-      <Tab.Screen name="Phát hiện" component={DetectionScreen} options={{ headerTitle: 'AI Detection System' }} />
+      <Tab.Screen name="Phát hiện" component={DetectionScreen} options={{ headerTitle: 'Detection System' }} />
       <Tab.Screen name="Files" component={FilesScreen} options={{ headerTitle: 'Quản lý file' }} />
       <Tab.Screen name="Cài đặt" component={SettingsScreen} options={{ headerTitle: 'Cài đặt' }} />
     </Tab.Navigator>

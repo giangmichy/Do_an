@@ -276,24 +276,25 @@ export default function FilesScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Quản lý file</Text>
-        <Text style={styles.headerSub}>Tổng {totalFiles} file</Text>
       </View>
 
       {/* Sort */}
       <View style={styles.sortRow}>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortOrder === 'desc' && styles.sortBtnActive]}
-          onPress={() => { setSortOrder('desc'); setPage(1); }}
-        >
-          <Text style={[styles.sortText, sortOrder === 'desc' && styles.sortTextActive]}>Mới nhất</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortOrder === 'asc' && styles.sortBtnActive]}
-          onPress={() => { setSortOrder('asc'); setPage(1); }}
-        >
-          <Text style={[styles.sortText, sortOrder === 'asc' && styles.sortTextActive]}>Cũ nhất</Text>
-        </TouchableOpacity>
+        <View style={styles.sortButtons}>
+          <TouchableOpacity
+            style={[styles.sortBtn, sortOrder === 'desc' && styles.sortBtnActive]}
+            onPress={() => { setSortOrder('desc'); setPage(1); }}
+          >
+            <Text style={[styles.sortText, sortOrder === 'desc' && styles.sortTextActive]}>Mới nhất</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.sortBtn, sortOrder === 'asc' && styles.sortBtnActive]}
+            onPress={() => { setSortOrder('asc'); setPage(1); }}
+          >
+            <Text style={[styles.sortText, sortOrder === 'asc' && styles.sortTextActive]}>Cũ nhất</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.totalFilesText}>Tổng {totalFiles} file</Text>
       </View>
 
       {/* File List */}
@@ -482,8 +483,10 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
   headerTitle: { fontSize: 22, fontWeight: '700', color: '#1e293b' },
   headerSub: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  sortRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 8 },
+  sortRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 8, justifyContent: 'space-between', alignItems: 'center' },
+  sortButtons: { flexDirection: 'row', gap: 8 },
   sortBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: '#f1f5f9' },
+  totalFilesText: { fontSize: 13, color: '#64748b', marginTop: 2 },
   sortBtnActive: { backgroundColor: '#7c3aed' },
   sortText: { fontSize: 13, color: '#64748b' },
   sortTextActive: { color: '#fff', fontWeight: '600' },

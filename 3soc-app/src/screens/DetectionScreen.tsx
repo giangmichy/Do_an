@@ -347,7 +347,7 @@ export default function DetectionScreen() {
         )}
       </View>
 
-      {/* ── TẦNG 2: STATUS BAR ── */}
+      {/* ── TẦNG 2: STATUS BAR ──
       {showStatusBar && (
         <View style={[styles.statusBar, isDetectDone && styles.statusBarDone]}>
           {isUploadingVideo ? (
@@ -369,7 +369,7 @@ export default function DetectionScreen() {
             <Text style={styles.statusText}>✓ Hoàn tất — {violationFrames.length} vi phạm phát hiện</Text>
           ) : null}
         </View>
-      )}
+      )} */}
 
       {/* ── TẦNG 3: PHẦN DƯỚI (scroll) ── */}
       <ScrollView style={styles.bottomArea} contentContainerStyle={styles.bottomContent}>

@@ -191,22 +191,13 @@ export default function Home() {
     return (
         <div className="min-h-screen bg-slate-50 p-6">
             <div className="max-w-7xl mx-auto space-y-6">
-                {/* Header
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-primary rounded-lg">
-                        <Activity className="text-white" size={24}/>
-                    </div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-800">AI Detection System</h1>
-                </div> */}
-
                 {/* Main Grid: Left Control - Right Video */}
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
 
                     {/* Cột trái: Upload & Detect */}
                     <div className="lg:col-span-1 space-y-6">
                         <Card className="shadow-sm">
-                            <CardHeader><CardTitle className="text-sm font-semibold">Cài đặt phân
-                                tích</CardTitle></CardHeader>
+                            <CardHeader><CardTitle className="text-sm font-semibold">Chọn file</CardTitle></CardHeader>
                             <CardContent className="space-y-4">
                                 <label
                                     className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-xl cursor-pointer hover:bg-slate-100 transition-colors border-slate-200">
@@ -319,7 +310,7 @@ export default function Home() {
                             <CardTitle className="text-sm flex items-center gap-2">
                                 Kết quả phát hiện
                                 <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded-full text-[10px]">
-                {violationFrames.length} Frames
+                {violationFrames.length} ảnh
               </span>
                             </CardTitle>
                         </CardHeader>

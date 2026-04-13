@@ -62,7 +62,7 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
                                     </div>
                                     {!isImageResult && (
                                         <div className="p-3 rounded-lg bg-muted">
-                                            <p className="text-xs text-muted-foreground">Frames processed</p>
+                                            <p className="text-xs text-muted-foreground">Ảnh xử lý</p>
                                             <p className="text-2xl font-bold">{data.processed_frames}</p>
                                         </div>
                                     )}
