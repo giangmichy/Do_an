@@ -3,10 +3,9 @@
 import React, {useState, useEffect} from 'react';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Button} from '@/components/ui/button';
-import {apiClient, VideoFile, DetectionResponse, DetectionBox, SortOrder} from '@/app/api';
-import {FileVideo, Upload, Trash2, Eye, Scan} from 'lucide-react';
+import {apiClient, VideoFile, DetectionResponse, SortOrder} from '@/app/api';
+import {FileVideo, Image as ImageIcon, Trash2, Eye, Scan} from 'lucide-react';
 import {Alert, AlertDescription} from '@/components/ui/alert';
-import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {useToast} from '@/hooks/use-toast';
 import DetectionModal from '@/components/DetectionModal';
 import { escapeHtml } from '@/lib/escapeHtml';
@@ -62,18 +61,31 @@ export default function FilesPage() {
         }
     };
 
-    const handleDetect = async (fileId: string, fileName: string) => {
+    const handleDetect = async (file: VideoFile) => {
         try {
             setDetecting(true);
             setError('');
             setDetectionResult(null);
-            setCurrentFileName(fileName);
+            setCurrentFileName(file.filename);
             setResultModalOpen(true); // Open modal immediately
 
-            setDetectionResult(null);
+            if (file.type === 'image') {
+                const imageResult = await apiClient.detectSavedImage(file.id);
+                setDetectionResult({
+                    media_type: 'image',
+                    detection_id: imageResult.file_id,
+                    total_frames: 1,
+                    processed_frames: 1,
+                    violation_count: imageResult.violation?.detections?.length ? 1 : 0,
+                    violations: imageResult.violation ? [imageResult.violation] : [],
+                    cached: imageResult.cached,
+                });
+                setDetecting(false);
+                return;
+            }
 
             const eventSource = new EventSource(
-                `http://localhost:8000/api/files/${fileId}/detect-stream?token=${encodeURIComponent(localStorage.getItem('access_token') || '')}`
+                `http://localhost:8000/api/files/${file.id}/detect-stream?token=${encodeURIComponent(localStorage.getItem('access_token') || '')}`
             );
 
             let violations: any[] = [];
@@ -99,6 +111,7 @@ export default function FilesPage() {
                         setDetecting(false);
                     } else if (msg.type === 'metadata') {
                         setDetectionResult({
+                            media_type: 'video',
                             detection_id: msg.detection_id || '',
                             total_frames: msg.total_frames || 0,
                             processed_frames: msg.processed_frames || 0,
@@ -108,6 +121,7 @@ export default function FilesPage() {
                         });
                     } else if (msg.type === 'init') {
                         setDetectionResult({
+                            media_type: 'video',
                             detection_id: msg.detection_id || '',
                             total_frames: msg.total_frames || 0,
                             processed_frames: 0,
@@ -181,21 +195,6 @@ export default function FilesPage() {
     };
 
 
-    const getStatusColor = (status: string) => {
-        switch (status) {
-            case 'uploaded':
-                return 'bg-blue-100 text-blue-800';
-            case 'processing':
-                return 'bg-yellow-100 text-yellow-800';
-            case 'completed':
-                return 'bg-green-100 text-green-800';
-            case 'error':
-                return 'bg-red-100 text-red-800';
-            default:
-                return 'bg-gray-100 text-gray-800';
-        }
-    };
-
     const visiblePages = (() => {
         if (totalPages <= 5) {
             return Array.from({length: totalPages}, (_, i) => i + 1);
@@ -249,7 +248,11 @@ export default function FilesPage() {
                                             <td className="p-4">{(page - 1) * pageSize + index + 1}</td>
                                             <td className="p-4">
                                                 <div className="flex items-center gap-2">
-                                                    <FileVideo size={16} className="text-muted-foreground"/>
+                                                    {file.type === 'image' ? (
+                                                        <ImageIcon size={16} className="text-muted-foreground"/>
+                                                    ) : (
+                                                        <FileVideo size={16} className="text-muted-foreground"/>
+                                                    )}
                                                     <span className="font-medium">{escapeHtml(file.filename)}</span>
                                                 </div>
                                             </td>
@@ -271,7 +274,7 @@ export default function FilesPage() {
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        onClick={() => handleDetect(file.id, file.filename)}
+                                                        onClick={() => handleDetect(file)}
                                                         disabled={detecting}
                                                     >
                                                         <Scan size={14}/>

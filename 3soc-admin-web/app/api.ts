@@ -62,19 +62,29 @@ export interface UserInfo {
 
 export interface VideoFile {
   id: string;
+  type: 'video' | 'image';
   filename: string;
   filepath: string;
   user_id?: number;
   file_size?: number;
   duration?: number;
-  status: string;
   created_at: string;
   owner?: UserInfo;
 }
 
 export interface VideoFileUpdate {
-  status?: string;
   duration?: number;
+}
+
+export interface ImageDetectionResult {
+  file_id: string;
+  type: 'image';
+  filename: string;
+  image_path: string;
+  detections: DetectionBox[];
+  violation: ViolationImage;
+  cached: boolean;
+  timestamp: string;
 }
 
 export interface DetectionBox {
@@ -95,6 +105,7 @@ export interface ViolationImage {
 }
 
 export interface DetectionResponse {
+  media_type?: 'video' | 'image';
   cached: any;
   detection_id: string;
   total_frames: number;
@@ -331,6 +342,18 @@ export class ApiClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || 'Failed to detect image');
+    }
+    return response.json();
+  }
+
+  async detectSavedImage(fileId: string): Promise<ImageDetectionResult> {
+    const response = await fetch(`${this.baseUrl}/files/${fileId}/detect-image`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Failed to detect saved image');
     }
     return response.json();
   }

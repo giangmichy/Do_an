@@ -150,6 +150,7 @@ async def upload_file(
 
     db_file = VideoFile(
         id=video_id,
+        type="video",
         filename=safe_filename,
         filepath=web_path,
         user_id=user_id,
@@ -370,6 +371,9 @@ def detect_file_stream(
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    file_type = (file.type or "").strip().lower()
+    if file_type != "video":
+        raise HTTPException(status_code=400, detail="detect-stream supports video files only")
 
     # Non-admin users can only scan their own files
     if role != "admin" and file.user_id != user_id:
@@ -435,7 +439,6 @@ def detect_file_stream(
         if file_update:
             if not file_update.detection_id:
                 file_update.detection_id = file_id
-            file_update.status = "processing"
             db_new.add(file_update)
             db_new.commit()
 
@@ -635,7 +638,6 @@ def detect_file_stream(
 
         file_update = db_new.query(VideoFile).filter(VideoFile.id == file_id).first()
         if file_update:
-            file_update.status = "completed"
             db_new.add(file_update)
             db_new.commit()
 
@@ -660,17 +662,98 @@ def detect_file_stream(
         }
     )
 
-# Detect objects in an uploaded image
+def _build_image_violation_payload(row: Violation) -> dict:
+    return {
+        "frame_number": row.frame_number,
+        "timestamp": row.timestamp,
+        "image_path": row.image_path,
+        "detections": row.detections or [],
+    }
+
+
+def _detect_and_cache_image_file(file: VideoFile, db: Session) -> tuple[list, dict, bool]:
+    cached = (
+        db.query(Violation)
+        .filter(Violation.video_id == file.id)
+        .order_by(Violation.created_at.asc())
+        .first()
+    )
+    if cached:
+        payload = _build_image_violation_payload(cached)
+        return payload["detections"], payload, True
+
+    physical_path = _resolve_physical_video_path(file)
+    if not physical_path or not physical_path.exists():
+        raise HTTPException(status_code=404, detail="Physical image file not found")
+
+    temp_path = None
+    detect_target = str(physical_path)
+    if str(physical_path).endswith(".enc"):
+        temp_path = decrypt_file_to_temp(str(physical_path), ENCRYPTION_KEY)
+        detect_target = temp_path
+
+    try:
+        detections = tasks.run_detection_on_image_temp(detect_target)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    violation_row = Violation(
+        video_id=file.id,
+        frame_number=1,
+        timestamp=0.0,
+        image_path=file.filepath,
+        detections=detections or [],
+    )
+    db.add(violation_row)
+    db.commit()
+    db.refresh(violation_row)
+    payload = _build_image_violation_payload(violation_row)
+    return payload["detections"], payload, False
+
+
+@router.get("/{file_id}/detect-image")
+def detect_saved_image(
+    file_id: str,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    user_data = get_current_user_from_token(authorization)
+    user_id = user_data.get("user_id")
+    role = user_data.get("role")
+
+    file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    file_type = (file.type or "").strip().lower()
+    if file_type != "image":
+        raise HTTPException(status_code=400, detail="This API only supports image files")
+    if role != "admin" and file.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
+
+    detections, violation, cached = _detect_and_cache_image_file(file, db)
+    return {
+        "file_id": file.id,
+        "type": file.type,
+        "filename": file.filename,
+        "image_path": file.filepath,
+        "detections": detections,
+        "violation": violation,
+        "cached": cached,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# Detect objects in an uploaded image and persist it as type=image file.
 @router.post("/detect-image")
 async def detect_image(
     file: UploadFile = File(...),
-    authorization: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
 ):
-    """
-    Upload an image file and run detection on it.
-    Returns detection results.
-    """
-    # Get user info from token if provided
     user_id = None
     try:
         if authorization:
@@ -678,41 +761,71 @@ async def detect_image(
             user_id = user_data.get("user_id")
     except Exception as e:
         print(f"[FILES] Warning: Failed to get user from token: {e}")
-    
-    # Validate that the uploaded file is an image
+
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only image files are allowed"
         )
 
-    # Validate file size
     content = await file.read()
     if len(content) > MAX_IMAGE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds 20 MB limit"
+            detail=f"File size exceeds {MAX_IMAGE_SIZE // (1024 * 1024)} MB limit"
         )
     await file.seek(0)
-    
-    # Save the uploaded image to a temporary location
-    temp_dir = UPLOAD_DIR / "temp"
-    temp_dir.mkdir(exist_ok=True)
-    temp_image_path = temp_dir / f"{uuid4()}_{sanitize_filename(unquote(file.filename or 'image'))}"
-    
+
+    safe_filename = sanitize_filename(unquote(file.filename or "image.jpg"))
+    file_ext = Path(safe_filename).suffix or ".jpg"
+    image_id = uuid4().hex
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    actual_path = UPLOAD_DIR / f"{image_id}{file_ext}"
+    web_path = f"/uploads/{image_id}{file_ext}"
+
     try:
-        with temp_image_path.open("wb") as buffer:
+        with actual_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
-        # Run detection
-        results = tasks.run_detection_on_image_temp(str(temp_image_path))
-        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload image: {str(e)}"
+        )
+
+    encrypted_path = Path(str(actual_path) + ".enc")
+    try:
+        encrypt_file(str(actual_path), str(encrypted_path), ENCRYPTION_KEY)
+        actual_path.unlink()
+    except Exception as e:
+        print(f"[FILES] Warning: Image encryption failed: {e}")
+        encrypted_path = actual_path
+
+    db_file = VideoFile(
+        id=image_id,
+        type="image",
+        filename=safe_filename,
+        filepath=web_path,
+        user_id=user_id,
+        file_size=encrypted_path.stat().st_size,
+        duration=None,
+        detection_id=image_id,
+    )
+    db.add(db_file)
+    db.commit()
+    db.refresh(db_file)
+
+    try:
+        detections, violation, _ = _detect_and_cache_image_file(db_file, db)
         return {
-            "filename": file.filename,
-            "detections": results,
-            "path": f"/uploads/temp/{temp_image_path.name}",
+            "file_id": db_file.id,
+            "type": db_file.type,
+            "filename": db_file.filename,
+            "detections": detections,
+            "path": db_file.filepath,
+            "violation": violation,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "user_id": user_id
+            "user_id": user_id,
+            "cached": False,
         }
     except Exception as e:
         print(f"[FILES] Detection error: {e}")
@@ -722,10 +835,3 @@ async def detect_image(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Detection failed: {str(e)}"
         )
-    finally:
-        # Clean up the temporary file
-        try:
-            if temp_image_path.exists():
-                temp_image_path.unlink()
-        except:
-            pass

@@ -24,6 +24,7 @@ export default function FilesScreen() {
   const [detectModalVisible, setDetectModalVisible] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [currentFileName, setCurrentFileName] = useState('');
+  const [currentFileType, setCurrentFileType] = useState<'video' | 'image'>('video');
   const [violations, setViolations] = useState<ViolationImage[]>([]);
   const [processedFrames, setProcessedFrames] = useState(0);
   const [totalFrames, setTotalFrames] = useState(0);
@@ -149,8 +150,9 @@ export default function FilesScreen() {
     ]);
   };
 
-  const handleDetect = (fileId: string, fName: string) => {
+  const handleDetect = async (fileId: string, fName: string, fileType: 'video' | 'image') => {
     setCurrentFileName(fName);
+    setCurrentFileType(fileType);
     setViolations([]);
     setProcessedFrames(0);
     setTotalFrames(0);
@@ -161,6 +163,20 @@ export default function FilesScreen() {
     if (sseRef.current) {
       sseRef.current.close();
       sseRef.current = null;
+    }
+
+    if (fileType === 'image') {
+      try {
+        const result = await apiClient.detectSavedImage(fileId);
+        setViolations(result.violation ? [result.violation] : []);
+        setProcessedFrames(1);
+        setTotalFrames(1);
+      } catch (err: any) {
+        Alert.alert('Lỗi', err.message || 'Không thể detect ảnh');
+      } finally {
+        setDetecting(false);
+      }
+      return;
     }
 
     const streamUrl = `${BACKEND_BASE_URL}/api/files/${fileId}/detect-stream`;
@@ -237,7 +253,7 @@ export default function FilesScreen() {
     <View style={styles.fileRow}>
       <View style={styles.fileInfo}>
         <View style={styles.fileNameRow}>
-          <Ionicons name="videocam-outline" size={16} color="#64748b" />
+          <Ionicons name={item.type === 'image' ? 'image-outline' : 'videocam-outline'} size={16} color="#64748b" />
           <Text style={styles.fileName} numberOfLines={1}>{item.filename}</Text>
         </View>
         <Text style={styles.fileMeta}>
@@ -246,7 +262,7 @@ export default function FilesScreen() {
         <Text style={styles.fileDate}>{formatDate(item.created_at)}</Text>
       </View>
       <View style={styles.fileActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => handleDetect(item.id, item.filename)}>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => handleDetect(item.id, item.filename, item.type)}>
           <Ionicons name="scan-outline" size={18} color="#7c3aed" />
         </TouchableOpacity>
         <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(item.id)}>
@@ -337,10 +353,12 @@ export default function FilesScreen() {
                 <Text style={styles.statLabel}>Vi phạm</Text>
                 <Text style={[styles.statValue, { color: '#dc2626' }]}>{violations.length}</Text>
               </View>
-              <View style={[styles.statCard, { backgroundColor: '#f0fdf4' }]}>
-                <Text style={styles.statLabel}>Đã xử lý</Text>
-                <Text style={[styles.statValue, { color: '#16a34a' }]}>{processedFrames}</Text>
-              </View>
+              {currentFileType === 'video' && (
+                <View style={[styles.statCard, { backgroundColor: '#f0fdf4' }]}>
+                  <Text style={styles.statLabel}>Đã xử lý</Text>
+                  <Text style={[styles.statValue, { color: '#16a34a' }]}>{processedFrames}</Text>
+                </View>
+              )}
             </View>
 
             {detecting && (
@@ -370,7 +388,9 @@ export default function FilesScreen() {
                       <View style={styles.violationGridBadge}>
                         <Text style={styles.violationGridBadgeText}>{v.detections?.length || 0}</Text>
                       </View>
-                      <Text style={styles.violationGridTime}>{(v.timestamp / 1000).toFixed(1)}s</Text>
+                      {currentFileType === 'video' && (
+                        <Text style={styles.violationGridTime}>{(v.timestamp / 1000).toFixed(1)}s</Text>
+                      )}
                     </TouchableOpacity>
                   );
                 })}
@@ -438,7 +458,9 @@ export default function FilesScreen() {
                 </View>
                 <View style={styles.detailStats}>
                   <Text style={styles.detailStatText}>Phát hiện: {selectedViolation.detections?.length || 0}</Text>
-                  <Text style={styles.detailStatText}>Thời gian: {(selectedViolation.timestamp / 1000).toFixed(2)}s</Text>
+                  {currentFileType === 'video' && (
+                    <Text style={styles.detailStatText}>Thời gian: {(selectedViolation.timestamp / 1000).toFixed(2)}s</Text>
+                  )}
                 </View>
                 {selectedViolation.detections?.map((d: any, i: number) => (
                   <View key={i} style={styles.detailDetRow}>

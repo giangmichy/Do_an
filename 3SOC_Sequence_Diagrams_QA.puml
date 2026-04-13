@@ -51,7 +51,7 @@ end note
 ' SD02: PHÁT HIỆN VI PHẠM TRONG ẢNH TĨNH
 ' ============================================================
 @startuml SD02_DetectAnh
-title SD02 — Upload ảnh → Phát hiện vi phạm (trả ngay lập tức)
+title SD02 — Upload ảnh → Lưu file type=image + Phát hiện vi phạm
 
 skinparam sequenceMessageAlign center
 skinparam ParticipantPadding 20
@@ -63,7 +63,8 @@ actor       "Người dùng" as User
 participant "Màn hình\n(Frontend)"  as FE
 participant "Máy chủ\n(FastAPI)"    as BE
 participant "AI Model\n(YOLO)"     as AI
-collections "Thư mục tạm\n(uploads/temp)" as Disk
+database    "Cơ sở dữ liệu\n(MySQL)" as DB
+collections "Thư mục\n(uploads)" as Disk
 
 note over BE, AI
   3 model AI chạy cùng lúc trên 1 ảnh:
@@ -74,22 +75,25 @@ end note
 
 User -> FE : Chọn ảnh từ thư viện
 FE -> BE : Gửi ảnh lên (POST /api/files/detect-image)
-BE -> Disk : Lưu ảnh tạm
+BE -> Disk : Lưu ảnh vào uploads/ + mã hóa .enc
+BE -> DB : INSERT video_files\n(type='image', detection_id=image_id)
 BE -> AI : Chạy 3 model AI trên ảnh
 AI --> BE : Trả về danh sách phát hiện\n{ vị trí bbox, nhãn, độ tin cậy }
-BE -> Disk : Xoá ảnh tạm
+BE -> DB : INSERT 1 row violations\n(frame_number=1, timestamp=0)
 
 alt Tìm thấy vi phạm
-    BE --> FE : Trả về danh sách detections
+    BE --> FE : Trả về detections + file_id + violation
     FE --> User : Vẽ khung đỏ/xanh quanh vùng vi phạm\nHiển thị tên vi phạm + % tin cậy
 else Không có vi phạm
-    BE --> FE : Danh sách rỗng
+    BE --> FE : Danh sách rỗng + file_id
     FE --> User : Thông báo "Không phát hiện vi phạm"
 end
 
-note over BE, Disk
-  Ảnh đơn KHÔNG lưu vào database.
-  Chỉ dùng để detect rồi xoá ngay.
+note over FE, BE
+  Luồng từ màn Quản lý file:
+  FE gọi GET /api/files/{id}/detect-image
+  - Nếu ảnh đã có cache violations: trả ngay
+  - Nếu chưa có cache: detect rồi lưu cache
 end note
 
 @enduml
@@ -121,7 +125,7 @@ User -> FE : Chọn video
 FE -> BE : POST /api/files/upload\n(kèm video_id do app sinh)
 BE -> Disk : Lưu video → Mã hóa AES-256-GCM\n(.mp4.enc) → Xoá file gốc
 BE -> DB : Ghi nhận file đã upload\n(video_files table)
-BE --> FE : Trả về 201 { id, filename, status }
+BE --> FE : Trả về 201 { id, filename, type='video' }
 
 ' ========== BƯỚC 2: BẮT ĐẦU DETECT ==========
 == 2. Bắt đầu phát hiện vi phạm ==
@@ -134,7 +138,6 @@ DB --> BE : CHƯA có → Phải chạy AI mới
 
 BE -> Disk : Giải mã .enc → file tạm
 BE --> FE : SSE event: 'init' (bắt đầu)\nSSE event: 'metadata' (tổng frame, fps)
-BE -> DB : Cập nhật status = 'processing'
 
 ' ========== BƯỚC 3: AI QUÉT TỪNG FRAME ==========
 == 3. AI quét từng frame video (gửi kết quả realtime) ==
@@ -165,7 +168,6 @@ end
 ' ========== BƯỚC 4: HOÀN TẤT ==========
 == 4. Hoàn tất ==
 
-BE -> DB : Cập nhật status = 'completed'
 BE -> Disk : Xoá file video tạm đã giải mã
 BE --> FE : SSE event: 'complete' { tổng số vi phạm }
 FE --> User : Hiển thị danh sách ảnh vi phạm\n+ Khung bbox đồng bộ khi xem lại video
@@ -219,7 +221,7 @@ FE --> User : Hiển thị kết quả ngay lập tức\n(không phải chờ AI
 ' SD05: XOÁ VIDEO
 ' ============================================================
 @startuml SD05_XoaVideo
-title SD05 — Xoá video (và toàn bộ kết quả liên quan)
+title SD05 — Xoá file media (video/ảnh) và kết quả liên quan
 
 skinparam sequenceMessageAlign center
 skinparam ParticipantPadding 20
@@ -233,7 +235,7 @@ participant "Máy chủ\n(FastAPI)"    as BE
 database    "Cơ sở dữ liệu\n(MySQL)" as DB
 collections "Thư mục\n(uploads)"    as Disk
 
-User -> FE : Nhấn "Xoá video"
+User -> FE : Nhấn "Xoá file"
 FE -> FE : Hiện hộp thoại xác nhận
 User -> FE : Xác nhận xoá
 FE -> BE : DELETE /api/files/{id}\n(kèm token đăng nhập)
@@ -242,15 +244,15 @@ BE -> DB : Tìm video theo id
 alt Video không tồn tại
     DB --> BE : Không tìm thấy
     BE --> FE : Trả về 404 Not Found
-    FE --> User : "Không tìm thấy video"
-else Video tồn tại nhưng KHÔNG thuộc về user này
+    FE --> User : "Không tìm thấy file"
+else File tồn tại nhưng KHÔNG thuộc về user này
     DB --> BE : Tìm thấy nhưng user_id khác
     BE --> FE : Trả về 403 Forbidden
-    FE --> User : "Bạn không có quyền xoá video này"
-else Video thuộc về user (hoặc admin xoá)
+    FE --> User : "Bạn không có quyền xoá file này"
+else File thuộc về user (hoặc admin xoá)
     DB --> BE : Tìm thấy, đúng chủ
 
-    BE -> Disk : Xoá file video (.enc hoặc .mp4)
+    BE -> Disk : Xoá file media (.enc hoặc file gốc)
     BE -> Disk : Xoá thư mục ảnh vi phạm\n(violations/{id}/*.jpg.enc)
     BE -> DB : Xoá record video_files
     note over DB

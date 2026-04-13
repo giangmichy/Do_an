@@ -167,12 +167,6 @@ export default function Home() {
     }, [isPlaying]);
 
     // 5. Tổng hợp dữ liệu hiển thị (Memoized để tránh lag)
-    const detectionFramesList = useMemo(() => {
-        return Array.from(detectionResults.entries())
-            .filter(([_, boxes]) => boxes.length > 0)
-            .map(([ts, boxes]) => ({ts, count: boxes.length}));
-    }, [detectionResults]);
-
     const sortedDetectionTimestamps = useMemo(
         () => Array.from(detectionResults.keys()).sort((a, b) => a - b),
         [detectionResults]
@@ -318,21 +312,21 @@ export default function Home() {
                     </div>
                 </div>
 
-                {/* Card dưới: Kết quả phát hiện */}
-                <Card className="shadow-sm">
-                    <CardHeader>
-                        <CardTitle className="text-sm flex items-center gap-2">
-                            Kết quả phát hiện vi phạm
-                            <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded-full text-[10px]">
-                {(mediaType === 'video' ? violationFrames.length : detectionFramesList.length)} Frames
+                {/* Card d?????i: K???t qu??? ph??t hi???n (video only) */}
+                {mediaType === 'video' && (
+                    <Card className="shadow-sm">
+                        <CardHeader>
+                            <CardTitle className="text-sm flex items-center gap-2">
+                                Kết quả phát hiện
+                                <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded-full text-[10px]">
+                {violationFrames.length} Frames
               </span>
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {(mediaType === 'video' ? violationFrames.length > 0 : detectionFramesList.length > 0) ? (
-                            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
-                                {mediaType === 'video' ? (
-                                    violationFrames.map((frame) => (
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            {violationFrames.length > 0 ? (
+                                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
+                                    {violationFrames.map((frame) => (
                                         <div
                                             key={frame.frame_number}
                                             className="group relative border rounded-lg overflow-hidden hover:ring-2 hover:ring-primary transition-all cursor-pointer"
@@ -355,39 +349,17 @@ export default function Home() {
                                                 <p className="text-[10px] font-medium text-slate-600">{(frame.timestamp / 1000).toFixed(1)}s</p>
                                             </div>
                                         </div>
-                                    ))
-                                ) : (
-                                    detectionFramesList.map((frame) => (
-                                        <div
-                                            key={frame.ts}
-                                            className="group relative border rounded-lg overflow-hidden hover:ring-2 hover:ring-primary transition-all cursor-pointer"
-                                            onClick={() => {
-                                                if (videoRef.current) videoRef.current.currentTime = frame.ts / 1000;
-                                            }}
-                                        >
-                                            <div
-                                                className="aspect-video bg-slate-200 flex items-center justify-center relative">
-                                                <ImageIcon size={16} className="text-slate-400"/>
-                                                <div
-                                                    className="absolute top-1 right-1 bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-md font-bold">
-                                                    {frame.count}
-                                                </div>
-                                            </div>
-                                            <div className="p-1.5 bg-white text-center">
-                                                <p className="text-[10px] font-medium text-slate-600">{(frame.ts / 1000).toFixed(1)}s</p>
-                                            </div>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-                        ) : (
-                            <div
-                                className="h-32 flex items-center justify-center border-2 border-dashed rounded-lg text-slate-400 text-sm">
-                                Chưa có dữ liệu vi phạm được phát hiện
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div
+                                    className="h-32 flex items-center justify-center border-2 border-dashed rounded-lg text-slate-400 text-sm">
+                                    Chưa có dữ liệu vi phạm được phát hiện
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
             </div>
         </div>
     );

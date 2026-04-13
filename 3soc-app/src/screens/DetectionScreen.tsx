@@ -432,25 +432,6 @@ export default function DetectionScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Image detection results */}
-        {imageDetections.length > 0 && (
-          <View style={styles.resultCard}>
-            <Text style={styles.sectionTitle}>Kết quả phát hiện</Text>
-            {imageDetections.map((det: any, idx: number) => {
-              const label = det.label || det.model || 'unknown';
-              const conf = det.confidence ?? det.score ?? 0;
-              const color = modelColorMap[label] || '#6b7280';
-              return (
-                <View key={idx} style={styles.detectionRow}>
-                  <View style={[styles.detectionDot, { backgroundColor: color }]} />
-                  <Text style={styles.detectionLabel}>{modelNameMap[label] || label}</Text>
-                  <Text style={styles.detectionConf}>{(conf * 100).toFixed(1)}%</Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
         {/* Violation frames */}
         {mediaType === 'video' && (
           <View style={styles.resultCard}>

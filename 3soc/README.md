@@ -88,6 +88,7 @@ Backend (3soc) ← FastAPI, port 8000
 |----------|--------------|
 | `POST /api/files/upload`, `GET /api/files`, `DELETE /api/files/{id}` | Bắt buộc JWT (Bearer token) |
 | `GET /api/files/{id}/detect-stream` | JWT qua header hoặc `?token=` query param (cho SSE) |
+| `GET /api/files/{id}/detect-image`, `POST /api/files/detect-image` | Bắt buộc JWT |
 | `GET /api/users`, `PUT/DELETE /api/users/{id}` | JWT + vai trò **admin** |
 
 - User thường chỉ xem/xoá file của mình; admin thao tác mọi file
@@ -240,7 +241,8 @@ Mở trình duyệt: **http://localhost:8000/docs**
 
 Nếu thấy giao diện Swagger UI → server đã chạy thành công ✅
 
-> **Lưu ý:** Bảng trong MySQL được tạo **tự động** khi server khởi động lần đầu, không cần chạy script SQL thủ công.
+> **Lưu ý:** Bảng trong MySQL được tạo **tự động** khi server khởi động lần đầu.  
+> Khi nâng cấp schema trên môi trường đang chạy, dùng file migration thủ công: `migrations/2026-04-13_add_type_drop_status_video_files.sql`.
 
 ---
 
@@ -308,17 +310,17 @@ ORM: **SQLAlchemy** — Python tự tạo bảng khi khởi động (`Base.metad
 
 ---
 
-### Bảng `video_files` — Lưu thông tin video đã upload
+### Bảng `video_files` — Lưu metadata file media đã upload
 
 | Cột | Kiểu dữ liệu | Mô tả |
 |-----|-------------|-------|
-| `id` | VARCHAR(64) (PK) | ID video (do Frontend tạo bằng `Date.now()`) |
+| `id` | VARCHAR(64) (PK) | ID file (video/image) |
 | `filename` | VARCHAR(255) | Tên file gốc (ví dụ: `video.mp4`) |
 | `filepath` | VARCHAR(500) | Đường dẫn web (ví dụ: `/uploads/1234567890.mp4`) |
 | `user_id` | INT (FK → users.id) | Người upload |
 | `file_size` | INT | Dung lượng file (bytes) |
-| `duration` | FLOAT | Thời lượng video (giây) |
-| `status` | VARCHAR(50) | Trạng thái: `uploaded` / `processing` / `completed` |
+| `duration` | FLOAT | Thời lượng video (giây), ảnh để `NULL` |
+| `type` | VARCHAR(16) | Loại file: `video` / `image` |
 | `detection_id` | VARCHAR(64) | Liên kết đến thư mục lưu ảnh vi phạm |
 | `created_at` | DATETIME | Thời gian upload |
 
@@ -326,7 +328,7 @@ ORM: **SQLAlchemy** — Python tự tạo bảng khi khởi động (`Base.metad
 
 ### Bảng `violations` — Lưu từng frame vi phạm phát hiện được
 
-Mỗi frame vi phạm được lưu thành **1 row** trong bảng này. Khi xoá video, toàn bộ violations liên quan tự động bị xoá theo (cascade).
+Mỗi frame vi phạm được lưu thành **1 row** trong bảng này. Khi xoá file media, toàn bộ violations liên quan tự động bị xoá theo (cascade).
 
 | Cột | Kiểu dữ liệu | Mô tả |
 |-----|-------------|-------|
@@ -394,9 +396,10 @@ users (1) ────────────── (N) video_files (1) ──�
 |--------|----------|---------------|-------|
 | POST | `/api/files/upload` | Có | Upload video (multipart/form-data) |
 | GET | `/api/files` | Có | Danh sách file (user thấy của mình, admin thấy tất cả) |
-| DELETE | `/api/files/{id}` | Có | Xoá file video + ảnh vi phạm + rows violations |
-| POST | `/api/files/detect-image` | Tuỳ chọn | Upload ảnh → detect ngay, trả kết quả (không lưu) |
-| GET | `/api/files/{id}/detect-stream` | Không | **SSE** — stream kết quả detect video |
+| DELETE | `/api/files/{id}` | Có | Xoá file media + ảnh vi phạm + rows violations |
+| POST | `/api/files/detect-image` | Có | Upload ảnh, lưu file `type=image`, detect và cache kết quả |
+| GET | `/api/files/{id}/detect-image` | Có | Detect ảnh đã lưu theo `file_id` (dùng ở màn quản lý file) |
+| GET | `/api/files/{id}/detect-stream` | Có | **SSE** — stream kết quả detect video (`type=video`) |
 
 ---
 
@@ -444,7 +447,7 @@ users (1) ────────────── (N) video_files (1) ──�
                - Yield SSE "violation":
                  { type:"violation", data:{ frame_number, timestamp, image_path, detections } }
 
-         Kết thúc: cập nhật status="completed"
+         Kết thúc:
            → Yield SSE "complete": { type:"complete", total_violations: N }
 ```
 
@@ -467,21 +470,20 @@ data: {"type": "complete",  "total_violations": 5}
 [Frontend] Chọn file ảnh → POST /api/files/detect-image
     │
     ▼
-[Backend] Lưu ảnh tạm vào uploads/temp/
+[Backend] Lưu ảnh vào uploads/ (mã hoá .enc)
+          → INSERT row vào video_files với type="image"
           → Chạy 3 model YOLO trên ảnh
-          → Xoá file tạm ngay sau khi xong
-          → Trả về kết quả:
-          {
-            "filename": "anh.jpg",
-            "detections": [ { "x":100, "y":200, "width":80, "height":60,
-                               "label": "co3soc", "confidence": 0.92 } ],
-            "timestamp": "2026-03-16T10:00:00Z"
-          }
+          → INSERT 1 row vào violations (frame_number=1, timestamp=0)
+          → Trả về kết quả detect + file_id
     │
     ▼
 [Frontend] Vẽ bounding box lên ảnh
 
-※ Ảnh detect đơn lẻ KHÔNG lưu vào DB, KHÔNG lưu disk — chỉ trả kết quả tức thì.
+[Frontend - Quản lý file] Bấm detect trên file type=image
+    │  GET /api/files/{id}/detect-image
+    ▼
+[Backend] Nếu đã có cache violations của ảnh → trả ngay
+          Nếu chưa có cache → detect rồi lưu cache
 ```
 
 ---
@@ -508,13 +510,13 @@ data: {"type": "complete",  "total_violations": 5}
 
 ---
 
-### Luồng 4: Xoá video
+### Luồng 4: Xoá file media
 
 ```
 [Frontend] Bấm xoá → DELETE /api/files/{id}
     │
     ▼
-[Backend] Xoá file video vật lý trên disk (uploads/{id}.mp4)
+[Backend] Xoá file media vật lý trên disk (uploads/{id}.* hoặc .enc)
           → Xoá record trong bảng video_files
           → Bảng violations tự xoá toàn bộ rows liên quan (CASCADE)
           ※ Ảnh .jpg trong uploads/violations/{id}/ KHÔNG tự xoá —
@@ -529,7 +531,7 @@ data: {"type": "complete",  "total_violations": 5}
 |-------|--------|--------|
 | SSE detect-stream (lần đầu) | ✅ INSERT violations | ❌ không |
 | SSE detect-stream (cache hit) | ❌ không | ✅ SELECT violations |
-| Detect ảnh tĩnh | ❌ không | ❌ không |
+| Detect ảnh tĩnh | ✅ INSERT video_files + violations | ✅ SELECT violations (cache) |
 
 ---
 
@@ -625,5 +627,7 @@ Khi server khởi động lần đầu, hệ thống tự tạo 2 tài khoản:
 - [ ] `GET /api/files/{id}/detect-stream` → SSE stream chạy, nhận được events `detection` và `violation`
 - [ ] Sau khi scan xong: DB có rows trong `violations`, ảnh `.jpg` xuất hiện trong `uploads/violations/{id}/`
 - [ ] Scan lại video đã scan → nhận ngay kết quả cache (không chạy AI lại)
-- [ ] Xoá video → rows trong `violations` tự biến mất (cascade)
-- [ ] `POST /api/files/detect-image` với file ảnh → nhận kết quả detect, không có gì lưu vào DB
+- [ ] Xoá file media → rows trong `violations` tự biến mất (cascade)
+- [ ] `POST /api/files/detect-image` với file ảnh → tạo row `type=image` trong `video_files`, có row trong `violations`
+- [ ] `GET /api/files/{id}/detect-image` trên file ảnh → trả kết quả cache/recalc thành công
+

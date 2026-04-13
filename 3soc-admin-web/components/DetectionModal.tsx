@@ -36,6 +36,7 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
     fileName: string;
 }) => {
     const [selectedViolation, setSelectedViolation] = useState<any>(null);
+    const isImageResult = data?.media_type === 'image';
 
     useEffect(() => {
         if (!open || !data) {
@@ -59,10 +60,12 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
                                         <p className="text-xs text-muted-foreground">Ảnh vi phạm</p>
                                         <p className="text-2xl font-bold text-red-600">{data.violation_count}</p>
                                     </div>
-                                    <div className="p-3 rounded-lg bg-muted">
-                                        <p className="text-xs text-muted-foreground">Ảnh đã xử lý</p>
-                                        <p className="text-2xl font-bold">{data.processed_frames}</p>
-                                    </div>
+                                    {!isImageResult && (
+                                        <div className="p-3 rounded-lg bg-muted">
+                                            <p className="text-xs text-muted-foreground">Frames processed</p>
+                                            <p className="text-2xl font-bold">{data.processed_frames}</p>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Violation Images Grid */}
@@ -85,9 +88,11 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
                                                         <div className="absolute top-1 right-1 bg-red-600 text-white text-xs px-2 py-1 rounded font-semibold">
                                                             {v.detections.length}
                                                         </div>
-                                                        <div className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                                                            {(v.timestamp / 1000).toFixed(2)}s
-                                                        </div>
+                                                        {!isImageResult && (
+                                                            <div className="absolute bottom-1 left-1 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                                                                {(v.timestamp / 1000).toFixed(2)}s
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             ))}
@@ -114,7 +119,7 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
                 <DialogContent className="w-[60vw] max-w-none sm:max-w-none p-0 flex flex-col">
                     <DialogHeader className="shrink-0 border-b pb-3 px-6 pt-5">
                         <DialogTitle className="text-sm">
-                            Chi tiết vi phạm — {selectedViolation ? `${(selectedViolation.timestamp / 1000).toFixed(2)}s` : ''}
+                            Chi ti???t vi ph???m{!isImageResult && selectedViolation ? ` - ${(selectedViolation.timestamp / 1000).toFixed(2)}s` : ''}
                         </DialogTitle>
                     </DialogHeader>
                     {selectedViolation && (
@@ -132,10 +137,12 @@ const DetectionModal = ({open, onOpenChange, data, fileName}: {
                                             <p className="text-xs text-muted-foreground mb-2">Số phát hiện</p>
                                             <p className="text-2xl font-bold text-red-600">{selectedViolation.detections.length}</p>
                                         </div>
-                                        <div className="p-3 rounded-lg bg-muted">
-                                            <p className="text-xs text-muted-foreground">Thời gian</p>
-                                            <p className="text-xl font-bold">{(selectedViolation.timestamp / 1000).toFixed(2)}s</p>
-                                        </div>
+                                        {!isImageResult && (
+                                            <div className="p-3 rounded-lg bg-muted">
+                                                <p className="text-xs text-muted-foreground">Time</p>
+                                                <p className="text-xl font-bold">{(selectedViolation.timestamp / 1000).toFixed(2)}s</p>
+                                            </div>
+                                        )}
                                     </div>
                                     <div>
                                         <p className="text-xs font-semibold mb-2">Chi tiết phát hiện</p>
@@ -275,3 +282,4 @@ const drawBboxOnImage = async (imagePath: string, detections: DetectionBox[]): P
         img.src = imagePath;
     });
 };
+
