@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { apiClient } from '@/app/api';
 import type { BoundingBox } from '@/lib/WebSocketClient';
 
 export type ViolationFrame = {
@@ -54,8 +55,9 @@ export function useViolationSSE({
       sseRef.current = null;
     }
 
+    const apiToken = apiClient.getToken();
     const es = new EventSource(
-      `${API_BASE_URL}/files/${videoId}/detect-stream?sample_ms=${DETECT_SAMPLE_MS}&cooldown_ms=${SAVE_COOLDOWN_MS}&save_image_ms=${SAVE_IMAGE_MS}`
+      `${API_BASE_URL}/files/${videoId}/detect-stream?sample_ms=${DETECT_SAMPLE_MS}&cooldown_ms=${SAVE_COOLDOWN_MS}&save_image_ms=${SAVE_IMAGE_MS}${apiToken ? `&token=${encodeURIComponent(apiToken)}` : ''}`
     );
     sseRef.current = es;
 

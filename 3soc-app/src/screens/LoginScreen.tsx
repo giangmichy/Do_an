@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, user, logout } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -28,6 +28,16 @@ export default function LoginScreen() {
     }
   };
 
+  React.useEffect(() => {
+    if (user && user.role === 'admin') {
+      Alert.alert(
+        'Không cho phép',
+        'Ứng dụng này chỉ dành cho người dùng thông thường. Vui lòng sử dụng web admin.',
+        [{ text: 'OK', onPress: () => logout() }]
+      );
+    }
+  }, [user]);
+
   return (
     <View style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.inner}>
@@ -37,7 +47,7 @@ export default function LoginScreen() {
             <Ionicons name="shield-checkmark" size={48} color="#7c3aed" />
           </View>
           <Text style={styles.title}>3SOC Detection</Text>
-          <Text style={styles.subtitle}>Hệ thống phát hiện vi phạm AI</Text>
+          <Text style={styles.subtitle}>Hệ thống phát hiện vi phạm</Text>
         </View>
 
         {/* Form */}

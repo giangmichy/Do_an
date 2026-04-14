@@ -3,14 +3,21 @@ import numpy as np
 from pathlib import Path
 from ultralytics import YOLO
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 from app.routers.users import router as users_router
 from app.routers.files import router as files_router
 from app.db.db import init_db, SessionLocal
 from app.utils.auth import get_password_hash
+from app.utils.crypto import encrypt_bytes, decrypt_bytes
+from app.config import ENCRYPTION_KEY
+import base64
 from app.db.models import User
+from app.config import UPLOAD_DIR
+import base64
+import os
+import mimetypes
 
 
 
@@ -58,7 +65,41 @@ app.include_router(users_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 
 # Serve uploaded files statically at /uploads
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Encrypted files (.enc) are decrypted on-the-fly before serving
+@app.get("/uploads/{path:path}")
+async def serve_upload(path: str):
+    file_path = UPLOAD_DIR / path
+    # Fallback: try .enc if the plaintext file doesn't exist
+    if not file_path.exists() or not file_path.is_file():
+        enc_path = file_path.with_suffix(file_path.suffix + ".enc")
+        if enc_path.exists() and enc_path.is_file():
+            file_path = enc_path
+        else:
+            raise HTTPException(status_code=404, detail="File not found")
+
+    file_bytes = file_path.read_bytes()
+
+    # If encrypted, decrypt and serve
+    if str(file_path).endswith(".enc"):
+        try:
+            plaintext = decrypt_bytes(file_bytes, ENCRYPTION_KEY)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Decryption failed")
+        # Determine content type from the original filename (strip .enc)
+        original_name = file_path.name[:-4]
+        content_type, _ = mimetypes.guess_type(original_name)
+        content_type = content_type or "application/octet-stream"
+        return Response(content=plaintext, media_type=content_type)
+
+    # Serve plaintext as-is
+    content_type, _ = mimetypes.guess_type(str(file_path))
+    content_type = content_type or "application/octet-stream"
+    return Response(content=file_bytes, media_type=content_type)
+
+
+def _encrypt_email(email: str) -> str:
+    """Encrypt email using AES-256-GCM and encode with base64."""
+    return base64.b64encode(encrypt_bytes(email.encode(), ENCRYPTION_KEY)).decode()
 
 
 def seed_admin_if_missing():
@@ -67,38 +108,38 @@ def seed_admin_if_missing():
     try:
         # Check if admin user exists
         admin_exists = db.query(User).filter(User.username == "admin").first()
-        
+
         if admin_exists:
             print("[INFO] Admin user already exists")
             return
-        
+
         print("[INFO] Admin not found, creating default users...")
-        
-        # Create admin user
+
+        # Create admin user with encrypted email
         admin = User(
             username="admin",
-            email="admin@example.com",
+            email=_encrypt_email("admin@example.com"),
             password_hash=get_password_hash("admin123"),
             role="admin",
             is_active=True
         )
         db.add(admin)
-        
-        # Create regular user
+
+        # Create regular user with encrypted email
         user = User(
             username="user",
-            email="user@example.com",
+            email=_encrypt_email("user@example.com"),
             password_hash=get_password_hash("user123"),
             role="user",
             is_active=True
         )
         db.add(user)
-        
+
         db.commit()
         print("[INFO] ✓ Default users created successfully!")
         print("[INFO]   - Admin: admin / admin123")
         print("[INFO]   - User: user / user123")
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to seed admin user: {e}")
         db.rollback()
@@ -135,12 +176,12 @@ async def startup_event():
         for model_name, model in _LOADED_MODELS.items():
             try:
                 print(f"[INFO] Warming up model: {model_name}")
-                results = model(dummy_frame, device=DEVICE_STR, save=False, verbose=False)
+                results = model(dummy_frame, device=DEVICE_STR, save=False, verbose=True)
                 print(f"[INFO] ✓ Model {model_name} warmed up successfully")
             except TypeError:
                 # Fallback if device parameter not supported
                 try:
-                    results = model(dummy_frame, save=False, verbose=False)
+                    results = model(dummy_frame, save=False, verbose=True)
                     print(f"[INFO] ✓ Model {model_name} warmed up successfully (no device param)")
                 except Exception as e:
                     print(f"[WARN] Failed to warm up {model_name}: {e}")

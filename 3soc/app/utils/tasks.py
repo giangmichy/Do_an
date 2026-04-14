@@ -3,6 +3,8 @@ from pathlib import Path
 import torch
 from typing import List, Dict, Any
 import traceback
+import numpy as np
+import cv2
 
 
 # Configure device
@@ -56,7 +58,7 @@ def run_detection_on_frame(frame) -> List[Dict[str, Any]]:
     try:
         for model_name, model in _MODELS.items():
             try:
-                res_list = model(frame, save=False, verbose=False)
+                res_list = model(frame, save=False, verbose=True)
                 if len(res_list) == 0:
                     continue
                 res = res_list[0]
@@ -81,18 +83,36 @@ def run_detection_on_image_temp(image_path: str) -> List[Dict[str, Any]]:
     """
     aggregate_results = []
     try:
+        # Read image bytes directly so detection still works for temp files without extension.
+        image_bytes = np.fromfile(str(image_path), dtype=np.uint8)
+        frame = cv2.imdecode(image_bytes, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError(f"Unable to decode image bytes from path: {image_path}")
+
         for model_name, model in _MODELS.items():
             try:
-                res_list = model(str(image_path), save=False, verbose=False)
+                res_list = model(frame, save=False, verbose=True)
                 if len(res_list) == 0:
                     continue
                 res = res_list[0]
                 boxes = _boxes_from_result(res)
-                # attach model name and label to each box
+                # Normalize image output to websocket-style format for consistency.
                 for b in boxes:
-                    b["model"] = model_name
-                    b["label"] = model_name  # Add label for frontend
-                aggregate_results.extend(boxes)
+                    x1 = float(b.get("x1", 0.0))
+                    y1 = float(b.get("y1", 0.0))
+                    x2 = float(b.get("x2", x1))
+                    y2 = float(b.get("y2", y1))
+                    confidence = float(b.get("confidence", b.get("score", 0.0)))
+                    aggregate_results.append({
+                        "x": int(x1),
+                        "y": int(y1),
+                        "width": int(max(0.0, x2 - x1)),
+                        "height": int(max(0.0, y2 - y1)),
+                        "label": model_name,
+                        "model": model_name,
+                        "confidence": round(confidence, 4),
+                        "class": int(b.get("class", 0)),
+                    })
             except Exception as e:
                 print(f"[TASKS] error running model {model_name}: {e}")
                 traceback.print_exc()

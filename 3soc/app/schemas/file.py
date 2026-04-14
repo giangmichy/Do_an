@@ -14,6 +14,7 @@ class UserInfoBasic(BaseModel):
 
 
 class VideoFileBase(BaseModel):
+    type: str = "video"
     filename: str
     filepath: str
     file_size: Optional[int] = None
@@ -25,14 +26,12 @@ class VideoFileCreate(VideoFileBase):
 
 
 class VideoFileUpdate(BaseModel):
-    status: Optional[str] = None
     duration: Optional[float] = None
 
 
 class VideoFileResponse(VideoFileBase):
     id: str
     user_id: Optional[int] = None
-    status: str
     created_at: datetime
     owner: Optional[UserInfoBasic] = None
 

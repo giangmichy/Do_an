@@ -1,17 +1,17 @@
 import React from "react"
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { AuthProvider } from '@/contexts/AuthContext'
 import { TopBar } from '@/components/TopBar'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin", "vietnamese"] });
 
 export const metadata: Metadata = {
-  title: 'AI Detection Admin Dashboard',
-  description: 'Real-time video analysis and AI model monitoring dashboard. Upload videos, detect objects, and monitor system performance.',
+  title: 'Detection Admin Dashboard',
+  description: '',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -40,13 +40,15 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`font-sans antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
-        <div className="flex flex-col min-h-screen">
-          <TopBar />
-          <main className="flex-1">
-            {children}
-          </main>
-        </div>
+      <body className={`${inter.className} antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
+        <AuthProvider>
+          <div className="flex flex-col min-h-screen">
+            <TopBar />
+            <main className="flex-1">
+              {children}
+            </main>
+          </div>
+        </AuthProvider>
         <Toaster />
         <Analytics />
       </body>

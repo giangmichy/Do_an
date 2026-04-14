@@ -50,12 +50,6 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Ionicons name="settings-outline" size={28} color="#7c3aed" />
-        <Text style={styles.headerTitle}>Cài đặt</Text>
-      </View>
-
       {/* Tabs */}
       <View style={styles.tabs}>
         <TouchableOpacity
@@ -162,12 +156,6 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
       )}
-
-      {/* App Info */}
-      <View style={styles.appInfo}>
-        <Text style={styles.appInfoText}>3SOC Detection v1.0.0</Text>
-        <Text style={styles.appInfoText}>React Native + FastAPI</Text>
-      </View>
     </ScrollView>
   );
 }

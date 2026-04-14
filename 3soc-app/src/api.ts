@@ -56,12 +56,12 @@ export type SortOrder = 'asc' | 'desc';
 
 export interface VideoFile {
   id: string;
+  type: 'video' | 'image';
   filename: string;
   filepath: string;
   user_id?: number;
   file_size?: number;
   duration?: number;
-  status: string;
   created_at: string;
   owner?: { id: number; username: string; email: string };
 }
@@ -91,6 +91,17 @@ export interface DetectionResponse {
   processed_frames: number;
   violation_count?: number;
   violations: ViolationImage[];
+}
+
+export interface ImageDetectionResult {
+  file_id: string;
+  type: 'image';
+  filename: string;
+  image_path: string;
+  detections: DetectionBox[];
+  violation: ViolationImage;
+  cached: boolean;
+  timestamp: string;
 }
 
 export interface BoundingBox {
@@ -274,6 +285,18 @@ class ApiClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Detect thất bại');
+    }
+    return res.json();
+  }
+
+  async detectSavedImage(fileId: string): Promise<ImageDetectionResult> {
+    const res = await fetch(`${this.baseUrl}/files/${fileId}/detect-image`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Detect ảnh lưu trữ thất bại');
     }
     return res.json();
   }

@@ -24,6 +24,7 @@ export default function FilesScreen() {
   const [detectModalVisible, setDetectModalVisible] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [currentFileName, setCurrentFileName] = useState('');
+  const [currentFileType, setCurrentFileType] = useState<'video' | 'image'>('video');
   const [violations, setViolations] = useState<ViolationImage[]>([]);
   const [processedFrames, setProcessedFrames] = useState(0);
   const [totalFrames, setTotalFrames] = useState(0);
@@ -132,25 +133,10 @@ export default function FilesScreen() {
 
   useEffect(() => { loadFiles(page); }, [page, sortOrder]);
 
-  const handleDelete = (id: string) => {
-    Alert.alert('Xác nhận', 'Bạn có chắc muốn xóa file này?', [
-      { text: 'Hủy', style: 'cancel' },
-      {
-        text: 'Xóa', style: 'destructive',
-        onPress: async () => {
-          try {
-            await apiClient.deleteFile(id);
-            loadFiles(page);
-          } catch (err: any) {
-            Alert.alert('Lỗi', err.message);
-          }
-        },
-      },
-    ]);
-  };
 
-  const handleDetect = (fileId: string, fName: string) => {
+  const handleDetect = async (fileId: string, fName: string, fileType: 'video' | 'image') => {
     setCurrentFileName(fName);
+    setCurrentFileType(fileType);
     setViolations([]);
     setProcessedFrames(0);
     setTotalFrames(0);
@@ -161,6 +147,20 @@ export default function FilesScreen() {
     if (sseRef.current) {
       sseRef.current.close();
       sseRef.current = null;
+    }
+
+    if (fileType === 'image') {
+      try {
+        const result = await apiClient.detectSavedImage(fileId);
+        setViolations(result.violation ? [result.violation] : []);
+        setProcessedFrames(1);
+        setTotalFrames(1);
+      } catch (err: any) {
+        Alert.alert('Lỗi', err.message || 'Không thể detect ảnh');
+      } finally {
+        setDetecting(false);
+      }
+      return;
     }
 
     const streamUrl = `${BACKEND_BASE_URL}/api/files/${fileId}/detect-stream`;
@@ -237,7 +237,7 @@ export default function FilesScreen() {
     <View style={styles.fileRow}>
       <View style={styles.fileInfo}>
         <View style={styles.fileNameRow}>
-          <Ionicons name="videocam-outline" size={16} color="#64748b" />
+          <Ionicons name={item.type === 'image' ? 'image-outline' : 'videocam-outline'} size={16} color="#64748b" />
           <Text style={styles.fileName} numberOfLines={1}>{item.filename}</Text>
         </View>
         <Text style={styles.fileMeta}>
@@ -246,11 +246,8 @@ export default function FilesScreen() {
         <Text style={styles.fileDate}>{formatDate(item.created_at)}</Text>
       </View>
       <View style={styles.fileActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={() => handleDetect(item.id, item.filename)}>
+        <TouchableOpacity style={styles.actionBtn} onPress={() => handleDetect(item.id, item.filename, item.type)}>
           <Ionicons name="scan-outline" size={18} color="#7c3aed" />
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => handleDelete(item.id)}>
-          <Ionicons name="trash-outline" size={18} color="#ef4444" />
         </TouchableOpacity>
       </View>
     </View>
@@ -260,24 +257,25 @@ export default function FilesScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Quản lý file</Text>
-        <Text style={styles.headerSub}>Tổng {totalFiles} file</Text>
       </View>
 
       {/* Sort */}
       <View style={styles.sortRow}>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortOrder === 'desc' && styles.sortBtnActive]}
-          onPress={() => { setSortOrder('desc'); setPage(1); }}
-        >
-          <Text style={[styles.sortText, sortOrder === 'desc' && styles.sortTextActive]}>Mới nhất</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sortBtn, sortOrder === 'asc' && styles.sortBtnActive]}
-          onPress={() => { setSortOrder('asc'); setPage(1); }}
-        >
-          <Text style={[styles.sortText, sortOrder === 'asc' && styles.sortTextActive]}>Cũ nhất</Text>
-        </TouchableOpacity>
+        <View style={styles.sortButtons}>
+          <TouchableOpacity
+            style={[styles.sortBtn, sortOrder === 'desc' && styles.sortBtnActive]}
+            onPress={() => { setSortOrder('desc'); setPage(1); }}
+          >
+            <Text style={[styles.sortText, sortOrder === 'desc' && styles.sortTextActive]}>Mới nhất</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.sortBtn, sortOrder === 'asc' && styles.sortBtnActive]}
+            onPress={() => { setSortOrder('asc'); setPage(1); }}
+          >
+            <Text style={[styles.sortText, sortOrder === 'asc' && styles.sortTextActive]}>Cũ nhất</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.totalFilesText}>Tổng {totalFiles} file</Text>
       </View>
 
       {/* File List */}
@@ -337,10 +335,12 @@ export default function FilesScreen() {
                 <Text style={styles.statLabel}>Vi phạm</Text>
                 <Text style={[styles.statValue, { color: '#dc2626' }]}>{violations.length}</Text>
               </View>
-              <View style={[styles.statCard, { backgroundColor: '#f0fdf4' }]}>
-                <Text style={styles.statLabel}>Đã xử lý</Text>
-                <Text style={[styles.statValue, { color: '#16a34a' }]}>{processedFrames}</Text>
-              </View>
+              {currentFileType === 'video' && (
+                <View style={[styles.statCard, { backgroundColor: '#f0fdf4' }]}>
+                  <Text style={styles.statLabel}>Đã xử lý</Text>
+                  <Text style={[styles.statValue, { color: '#16a34a' }]}>{processedFrames}</Text>
+                </View>
+              )}
             </View>
 
             {detecting && (
@@ -370,7 +370,9 @@ export default function FilesScreen() {
                       <View style={styles.violationGridBadge}>
                         <Text style={styles.violationGridBadgeText}>{v.detections?.length || 0}</Text>
                       </View>
-                      <Text style={styles.violationGridTime}>{(v.timestamp / 1000).toFixed(1)}s</Text>
+                      {currentFileType === 'video' && (
+                        <Text style={styles.violationGridTime}>{(v.timestamp / 1000).toFixed(1)}s</Text>
+                      )}
                     </TouchableOpacity>
                   );
                 })}
@@ -381,10 +383,31 @@ export default function FilesScreen() {
               </View>
             ) : null}
 
-            {/* Selected Violation Detail */}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Violation Detail Popup Modal */}
+      <Modal
+        visible={!!selectedViolation}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setSelectedViolation(null)}
+      >
+        <TouchableOpacity
+          style={styles.popupBackdrop}
+          activeOpacity={1}
+          onPress={() => setSelectedViolation(null)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.popupCard} onPress={() => {}}>
+            <View style={styles.popupHeader}>
+              <Text style={styles.detailTitle}>Chi tiết vi phạm</Text>
+              <TouchableOpacity onPress={() => setSelectedViolation(null)}>
+                <Ionicons name="close" size={22} color="#1e293b" />
+              </TouchableOpacity>
+            </View>
             {selectedViolation && (
-              <View style={styles.detailCard}>
-                <Text style={styles.detailTitle}>Chi tiết vi phạm</Text>
+              <>
                 <View
                   style={styles.detailImageWrap}
                   onLayout={(event) => {
@@ -417,7 +440,9 @@ export default function FilesScreen() {
                 </View>
                 <View style={styles.detailStats}>
                   <Text style={styles.detailStatText}>Phát hiện: {selectedViolation.detections?.length || 0}</Text>
-                  <Text style={styles.detailStatText}>Thời gian: {(selectedViolation.timestamp / 1000).toFixed(2)}s</Text>
+                  {currentFileType === 'video' && (
+                    <Text style={styles.detailStatText}>Thời gian: {(selectedViolation.timestamp / 1000).toFixed(2)}s</Text>
+                  )}
                 </View>
                 {selectedViolation.detections?.map((d: any, i: number) => (
                   <View key={i} style={styles.detailDetRow}>
@@ -425,10 +450,10 @@ export default function FilesScreen() {
                     <Text style={styles.detailDetConf}>{((d.confidence ?? d.score ?? 0) * 100).toFixed(1)}%</Text>
                   </View>
                 ))}
-              </View>
+              </>
             )}
-          </ScrollView>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
@@ -439,8 +464,10 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
   headerTitle: { fontSize: 22, fontWeight: '700', color: '#1e293b' },
   headerSub: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  sortRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 8 },
+  sortRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 8, justifyContent: 'space-between', alignItems: 'center' },
+  sortButtons: { flexDirection: 'row', gap: 8 },
   sortBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: '#f1f5f9' },
+  totalFilesText: { fontSize: 13, color: '#64748b', marginTop: 2 },
   sortBtnActive: { backgroundColor: '#7c3aed' },
   sortText: { fontSize: 13, color: '#64748b' },
   sortTextActive: { color: '#fff', fontWeight: '600' },
@@ -513,7 +540,7 @@ const styles = StyleSheet.create({
   detailTitle: { fontSize: 14, fontWeight: '600', color: '#1e293b', marginBottom: 8 },
   detailImageWrap: {
     width: '100%',
-    height: 200,
+    height: 220,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#000',
@@ -529,4 +556,25 @@ const styles = StyleSheet.create({
   },
   detailDetLabel: { fontSize: 13, color: '#334155', fontWeight: '500' },
   detailDetConf: { fontSize: 13, color: '#64748b' },
+  // Popup
+  popupBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  popupCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    width: '100%',
+    maxHeight: '85%',
+  },
+  popupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
 });

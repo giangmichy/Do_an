@@ -7,6 +7,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
+  isAdmin: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
@@ -20,12 +21,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const savedToken = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-    if (savedToken) {
-      setToken(savedToken);
-      apiClient.setToken(savedToken);
-    }
-    setIsLoading(false);
+    const initAuth = async () => {
+      const savedToken = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+      if (savedToken) {
+        setToken(savedToken);
+        apiClient.setToken(savedToken);
+        try {
+          const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const res = await fetch(`${API_URL}/api/users/me`, {
+            headers: { 'Authorization': `Bearer ${savedToken}` }
+          });
+          if (res.ok) {
+            const userData = await res.json();
+            setUser(userData);
+          }
+        } catch (err) {
+          console.error('[Auth] Failed to fetch user data:', err);
+        }
+      }
+      setIsLoading(false);
+    };
+    initAuth();
   }, []);
 
   const login = async (username: string, password: string) => {
@@ -53,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         token,
         isAuthenticated: !!token && !!user,
+        isAdmin: user?.role === 'admin',
         login,
         logout,
         isLoading,
@@ -71,6 +88,3 @@ export function useAuth() {
   return context;
 }
 
-export const setLocalStorage = () =>{
-
-}

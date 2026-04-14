@@ -1,0 +1,310 @@
+' ============================================================
+' 3SOC — SEQUENCE DIAGRAMS (VIẾT LẠI CHO QA / TESTER)
+' Ngôn ngữ đơn giản, tập trung vào LUỒNG NGHIỆP VỤ
+' Tool xem: https://www.plantuml.com/plantuml/uml/
+' ============================================================
+
+
+Note: 1 done, 2 done, 6 done, 5 done, 4 done
+
+' ============================================================
+' SD01: ĐĂNG NHẬP
+' ============================================================
+@startuml SD01_DangNhap
+title SD01 — Đăng nhập vào hệ thống
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "actor" as User
+participant "screen" as FE
+participant "controller"  as BE
+database    "database" as DB
+
+User -> FE : Nhập tài khoản + mật khẩu\nrồi nhấn "Đăng nhập"
+FE -> BE : Gửi yêu cầu POST /api/users/login\nkèm { username, password }
+BE -> DB : Tìm user theo username
+
+alt Mật khẩu đúng
+    DB --> BE : Tìm thấy user
+    BE -> BE : Kiểm tra mật khẩu\nTạo token đăng nhập JWT
+    BE --> FE : Trả về 200 OK\n{ token, thông tin user }
+    FE -> FE : Lưu token để dùng cho các lần sau
+    FE --> User : Chuyển vào màn hình chính
+else Mật khẩu sai
+    DB --> BE : Tìm thấy user (hoặc không)
+    BE -> BE : Kiểm tra mật khẩu → SAI
+    BE --> FE : Trả về 401\n"Thông tin tài khoản hoặc mật khẩu không đúng"
+    FE --> User : Hiển thị lỗi
+
+note over BE
+  Bảo vệ chống brute-force:
+  Tối đa 5 lần thử / phút / IP
+end note
+
+@enduml
+
+
+' ============================================================
+' SD02: PHÁT HIỆN VI PHẠM TRONG ẢNH TĨNH
+' ============================================================
+@startuml SD02_DetectAnh
+title SD02 — Detect ảnh
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "actor" as User
+participant "screen"  as FE
+participant "controller"    as BE
+participant "Model"     as MODEL
+database    "database" as DB
+collections "Thư mục\n(uploads)" as Disk
+
+
+User -> FE : Chọn ảnh từ thư viện
+FE -> BE : Gửi ảnh lên (POST /api/files/detect-image)
+BE -> Disk : Lưu ảnh vào uploads/ + mã hóa .enc
+BE -> DB : INSERT dữ liệu vào bảng video_files
+BE -> MODEL : Chạy 3 model detect ảnh
+MODEL --> BE : Trả về danh sách phát hiện\n{ vị trí bbox, nhãn, độ tin cậy }
+BE -> DB : INSERT dữ liệuvảo bảng violations
+
+alt Tìm thấy vi phạm
+    BE --> FE : Trả về detections + file_id + violation
+    FE --> User : Vẽ khung quanh vùng vi phạm\nHiển thị tên vi phạm + % tin cậy
+else Không có vi phạm
+    BE --> FE : Danh sách rỗng + file_id
+    FE --> User : Thông báo "Không phát hiện vi phạm"
+end
+
+
+@enduml
+
+
+' ============================================================
+' SD03: PHÁT HIỆN VI PHẠM TRỰC TIẾP
+' ============================================================
+@startuml SD03_DetectVideo
+title SD03 — Upload video → Phát hiện vi phạm trực tiếp
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "actor" as User
+participant "screen"  as FE
+participant "controller"    as BE
+participant "Model"     as MODEL
+database    "database" as DB
+collections "Thư mục\n(uploads)"    as Disk
+
+' ========== BƯỚC 1: UPLOAD ==========
+== 1. Upload video lên server ==
+
+User -> FE : Chọn video
+FE -> BE : POST /api/files/upload\n(kèm video_id do app sinh)
+BE -> Disk : Lưu video → Mã hóa AES-256-GCM\n(.mp4.enc) → Xoá file gốc
+BE -> DB : Lưu bản ghi file mới\n(bảng video_files)
+BE --> FE : Trả về 201 { id, filename, type='video' }
+
+' ========== BƯỚC 2: BẮT ĐẦU DETECT ==========
+== 2. Bắt đầu phát hiện vi phạm ==
+
+User -> FE : Nhấn "Bắt đầu phát hiện"
+FE -> BE : GET /api/files/{id}/detect-stream\n(SSE — Server-Sent Events)
+
+BE -> Disk : Giải mã .enc → file tạm
+BE --> FE : SSE event: 'init' (bắt đầu)\nSSE event: 'metadata' (tổng frame, fps)
+
+' ========== BƯỚC 3: MODEL QUÉT TỪNG FRAME ==========
+== 3. MODEL quét từng frame video (gửi kết quả realtime) ==
+
+note over BE, MODEL
+  Tạo 2 luồng xử lý song song:
+  Luồng 1: Đọc frame từ video
+  Luồng 2: Chạy model → Gửi kết quả về FE qua SSE
+end note
+
+loop Với mỗi frame được lấy mẫu
+    BE -> MODEL : Chạy 3 model YOLO trên frame
+    MODEL --> BE : Phát hiện: { bbox, nhãn, độ tin cậy }
+    BE --> FE : SSE event: 'detection'\n(frame, timestamp, danh sách bbox)
+
+    alt Phát hiện vi phạm MỚI (thoả cooldown)
+        note over BE
+          Cooldown 2 lớp để tránh lưu trùng:
+          - Mỗi nhãn: cách nhau 500ms
+          - Toàn cục: cách nhau 2000ms
+        end note
+        BE -> Disk : Lưu ảnh frame → Mã hóa (.jpg.enc)
+        BE -> DB : Lưu bản ghi vi phạm mới\n(bảng violations)
+        BE --> FE : SSE event: 'violation'\n(frame, timestamp, ảnh, bbox)
+    end
+end
+
+' ========== BƯỚC 4: HOÀN TẤT ==========
+== 4. Hoàn tất ==
+
+BE -> Disk : Xoá file video tạm đã giải mã
+BE --> FE : SSE event: 'complete' { tổng số vi phạm }
+FE --> User : Hiển thị danh sách ảnh vi phạm\n+ Khung bbox đồng bộ khi xem video
+
+@enduml
+
+
+
+' ============================================================
+' SD04: Xem lại lịch sử quét
+' ============================================================
+@startuml SD04_ViewCachedVideo
+title SD04 — Xem lại kết quả phát hiện video
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "actor" as User
+participant "screen"  as FE
+participant "controller"    as BE
+database    "database" as DB
+collections "Thư mục\n(uploads)"    as Disk
+
+' ========== BƯỚC 1: CHỌN VIDEO ĐÃ QUA DETECT ==========
+== 1. Người dùng chọn video đã phát hiện trước đó ==
+
+User -> FE : Chọn video đã phát hiện từ danh sách
+FE -> BE : GET /api/files/{id}/detect-stream\n(kèm token đăng nhập)
+
+' ========== BƯỚC 2: LẤY KẾT QUẢ TỪ CSDL VÀ DISK ==========
+== 2. Lấy kết quả từ DB và disk (đã lưu từ lần detect trước) ==
+
+BE -> DB : Kiểm tra video này đã được phát hiện trước đó chưa?
+DB --> BE : Có, đã có vi phạm được lưu trong bảng violations
+BE -> DB : Lấy danh sách vi phạm đã lưu
+BE -> Disk : Lấy đường dẫn ảnh vi phạm đã lưu
+BE --> FE : Trả về dữ liệu phát hiện đã lưu (detections, violations, metadata)
+
+' ========== BƯỚC 3: HIỂN THỊ KẾT QUẢ ==========
+== 3. Hiển thị lại toàn bộ kết quả đã lưu ==
+
+FE --> User : Hiển thị danh sách ảnh vi phạm đã lưu trước đó
+
+@enduml
+
+
+' ============================================================
+' SD05: XOÁ FILE
+' ============================================================
+@startuml SD05_XoaFile
+title SD05 — Xoá file media (video/ảnh) và kết quả liên quan (chỉ Admin)
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "actor" as User
+participant "screen"  as FE
+participant "controller"    as BE
+database    "database" as DB
+collections "Thư mục\n(uploads)"    as Disk
+
+User -> FE : Nhấn "Xoá file"
+FE -> FE : Hiện hộp thoại xác nhận
+User -> FE : Xác nhận xoá
+FE -> BE : DELETE /api/files/{id}\n(kèm token admin)
+BE -> DB : Tìm file theo id
+
+alt File không tồn tại
+    DB --> BE : Không tìm thấy
+    BE --> FE : Trả về 404 Not Found
+    FE --> User : "Không tìm thấy file"
+else Là Admin hợp lệ
+    DB --> BE : Tìm thấy file
+
+    BE -> Disk : Xoá file media (.enc hoặc file gốc)
+    BE -> Disk : Xoá thư mục ảnh vi phạm\n(violations/{id}/*.jpg.enc)
+    BE -> DB : Xoá bản ghi video_files
+    DB -> DB : Xoá bản ghi liên quan trong violations
+
+    BE --> FE : Trả về 204 No Content
+    FE -> FE : Xoá file khỏi danh sách
+    FE --> User : "Xoá thành công"
+end
+
+@enduml
+
+
+
+' ============================================================
+' SD06: ADMIN QUẢN LÝ TÀI KHOẢN
+' ============================================================
+@startuml SD06_QuanLyTaiKhoan
+title SD06 — Admin quản lý tài khoản người dùng
+
+skinparam sequenceMessageAlign center
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceArrowThickness 1.5
+skinparam roundcorner 6
+
+actor       "actor"      as Admin
+participant "screen" as FE
+participant "controller"     as BE
+database    "database"  as DB
+
+' --- DANH SÁCH ---
+== 1. Xem danh sách người dùng (có phân trang) ==
+
+Admin -> FE : Mở trang "Quản lý người dùng"
+FE -> BE : GET /api/users?page=1&page_size=10
+BE -> DB : Lấy danh sách users (mới nhất trước)\nGiới hạn 10 user / trang
+DB --> BE : Trả về danh sách user
+BE --> FE : { users[], tổng số, trang hiện tại }
+FE --> Admin : Hiển thị bảng user có phân trang
+
+' --- TẠO ---
+== 2. Tạo tài khoản mới ==
+
+Admin -> FE : Nhập { username, email, password, role }
+FE -> BE : POST /api/users/register
+BE -> DB : Kiểm tra username/email đã tồn tại chưa
+DB --> BE : Chưa tồn tại → OK
+BE -> BE : Mã hóa mật khẩu \nMã hóa email
+BE -> DB : INSERT user mới vào DB
+BE --> FE : Trả về 201 { user }
+FE --> Admin : "Tạo tài khoản thành công"
+
+' --- SỬA ---
+== 3. Chỉnh sửa thông tin user ==
+
+Admin -> FE : Chọn user → Sửa → Thay đổi thông tin
+FE -> BE : PUT /api/users/{id}\n{ username?, email?, role?, is_active? }
+BE -> DB : UPDATE user theo id
+DB --> BE : Cập nhật thành công
+BE --> FE : Trả về 200 { user }
+FE --> Admin : Cập nhật giao diện
+
+' --- XOÁ ---
+== 4. Xoá tài khoản ==
+
+Admin -> FE : Chọn user → Xoá → Xác nhận
+FE -> BE : DELETE /api/users/{id}
+BE -> DB : DELETE user theo id
+BE --> FE : Trả về 204 No Content
+FE -> FE : Xoá user khỏi bảng
+FE --> Admin : "Xoá tài khoản thành công"
+
+@enduml

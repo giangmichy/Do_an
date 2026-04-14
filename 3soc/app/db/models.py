@@ -6,10 +6,10 @@ from app.db.db import Base
 
 class User(Base):
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(100), unique=True, index=True, nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)  # String to hold encrypted email (base64)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(50), default="user")  # user, admin
     is_active = Column(Boolean, default=True)
@@ -24,12 +24,12 @@ class VideoFile(Base):
     __tablename__ = "video_files"
     
     id = Column(String(64), primary_key=True, index=True)
+    type = Column(String(16), nullable=False, default="video", index=True)  # video, image
     filename = Column(String(255), nullable=False)
     filepath = Column(String(500), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     file_size = Column(Integer)  # bytes
     duration = Column(Float)  # seconds
-    status = Column(String(50), default="uploaded")  # uploaded, processing, completed, error
     detection_id = Column(String(64), nullable=True, index=True)  # Link to detection folder
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     

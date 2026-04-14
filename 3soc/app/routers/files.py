@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, status, UploadFile,Form, File, Header, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, Form, File, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
@@ -11,23 +11,43 @@ from pathlib import Path
 from uuid import uuid4
 import cv2
 import json
+from urllib.parse import unquote
+import re
 from app.db.db import SessionLocal
 from app.db.models import VideoFile, Violation
 from app.schemas.file import VideoFileResponse, VideoFileListResponse
 from app.utils.auth import get_current_user_from_token
 from app.utils import tasks
-from app.config import UPLOAD_DIR
+from app.utils.crypto import encrypt_file, decrypt_file_to_temp
+from app.config import ENCRYPTION_KEY
+from app.config import UPLOAD_DIR, MAX_VIDEO_SIZE, MAX_IMAGE_SIZE
 router = APIRouter(prefix="/files", tags=["files"])
+
+DANGEROUS_FILENAME_PATTERN = re.compile(r'[<>&"\'/\\;`$!#%\^*\=\+@{}()\[\]~]')
+
+def sanitize_filename(filename: str) -> str:
+    """Remove potentially dangerous characters from filenames to prevent XSS."""
+    cleaned = re.sub(r'<[^>]*>', '', filename)
+    cleaned = DANGEROUS_FILENAME_PATTERN.sub('', cleaned)
+    cleaned = cleaned[:255]
+    return cleaned.strip()
 
 
 def _resolve_physical_video_path(file: VideoFile) -> Optional[Path]:
-    """Resolve physical video path from stored filepath, with legacy fallback."""
+    """Resolve the actual physical video path from the stored filepath, with legacy fallback support.
+    Supports both plain .mp4 and encrypted .mp4.enc files.
+    """
     filename = os.path.basename(file.filepath or "")
     direct = UPLOAD_DIR / filename
     if direct.exists():
         return direct
 
-    # Legacy rows may store "/uploads/<id>" without extension.
+    # Check for encrypted version
+    encrypted = UPLOAD_DIR / f"{filename}.enc"
+    if encrypted.exists():
+        return encrypted
+
+    # Legacy records may store "/uploads/<id>" without a file extension.
     candidates = sorted(UPLOAD_DIR.glob(f"{filename}.*")) if filename else []
     if candidates:
         return candidates[0]
@@ -50,26 +70,43 @@ async def upload_file(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Upload a video file"""
-    # Get user from token
+    """Upload a video file."""
+    # Get user info from token
     user_data = get_current_user_from_token(authorization)
     user_id = user_data.get("user_id")
     
-    # Validate file type
-    if not file.content_type.startswith("video/"):
+    # Validate that the uploaded file is a video
+    if not file.content_type or not file.content_type.startswith("video/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only video files are allowed"
         )
+
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_VIDEO_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File size exceeds {MAX_VIDEO_SIZE // (1024 * 1024)} MB limit"
+        )
+    # Reset file pointer for subsequent reads
+    await file.seek(0)
     
-    # Generate unique filename
+    # Generate the final filename and path
     # timestamp = int(os.path.getmtime(__file__) * 1000) if os.path.exists(__file__) else 0
     # file_ext = Path(file.filename).suffix
     # unique_filename = f"{timestamp}_{file.filename}"
-    file_ext = Path(file.filename).suffix # Láº¥y .mp4, .mov...
+    # Decode URL-encoded filename (e.g. %20 → space, %E1%BB%9D → ờ)
+    safe_filename = sanitize_filename(unquote(file.filename or ''))
+    file_ext = Path(safe_filename).suffix  # Get the extension, e.g. .mp4, .mov...
+
+    # Ensure upload directory exists
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
     actual_path = UPLOAD_DIR / f"{video_id}{file_ext}"
-    
-    # Save file
+    print(f"[FILES] Saving video to: {actual_path}")
+
+    # Save the uploaded file to disk
     try:
         with actual_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -78,40 +115,52 @@ async def upload_file(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload file: {str(e)}"
         )
+
+    # Encrypt video and replace plaintext
+    encrypted_path = Path(str(actual_path) + ".enc")
+    try:
+        encrypt_file(str(actual_path), str(encrypted_path), ENCRYPTION_KEY)
+        actual_path.unlink()  # Delete plaintext video
+    except Exception as e:
+        print(f"[FILES] Warning: Video encryption failed: {e}")
+        # Keep plaintext if encryption fails (degraded security, not a hard fail)
+        encrypted_path = actual_path
     
-    # Get file size
-    file_size = actual_path.stat().st_size
-    
-    # Get video duration using OpenCV
+    # Get file size (encrypted version)
+    file_size = encrypted_path.stat().st_size
+
+    # Get video duration using OpenCV (decrypt to temp first)
     duration = None
     try:
-        cap = cv2.VideoCapture(str(actual_path))
+        temp_path = decrypt_file_to_temp(str(encrypted_path), ENCRYPTION_KEY)
+        cap = cv2.VideoCapture(str(temp_path))
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS)
             frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             if fps > 0:
                 duration = frame_count / fps
         cap.release()
+        os.remove(temp_path)
     except Exception as e:
         print(f"Failed to get video duration: {e}")
     
     # Create database record
-    # Store web-accessible path for frontend
+    # Store a web-accessible path for frontend usage
     web_path = f"/uploads/{video_id}{file_ext}"
 
     db_file = VideoFile(
         id=video_id,
-        filename=file.filename,
+        type="video",
+        filename=safe_filename,
         filepath=web_path,
         user_id=user_id,
         file_size=file_size,
         duration=duration,
-        # status="uploaded"
     )
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
-    
+
     return db_file
 
 
@@ -125,8 +174,8 @@ def get_files(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Get list of files - users see only their own, admins see all"""
-    # Get user from token
+    """Get the list of files. Regular users only see their own files, admins see all files."""
+    # Get user info from token
     user_data = get_current_user_from_token(authorization)
     user_id = user_data.get("user_id")
     role = user_data.get("role")
@@ -138,12 +187,12 @@ def get_files(
 
     offset = (page - 1) * page_size
     
-    # Filter based on role
+    # Filter records based on user role
     if role == "admin":
-        # Admin sees all files
+        # Admin can see all files
         base_query = db.query(VideoFile).options(joinedload(VideoFile.owner))
     else:
-        # Regular users see only their own files
+        # Regular users can only see their own files
         base_query = db.query(VideoFile).options(joinedload(VideoFile.owner)).filter(VideoFile.user_id == user_id)
 
     total = base_query.count()
@@ -170,23 +219,46 @@ def get_files(
 
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_file(file_id: str, db: Session = Depends(get_db)):
-    """Delete file"""
+def delete_file(
+    file_id: str,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Delete a file. Requires authentication. Users can only delete their own files; admins can delete any."""
+    user_data = get_current_user_from_token(authorization)
+    user_id = user_data.get("user_id")
+    role = user_data.get("role")
+
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
-    # Delete physical file
+
+    # Non-admin users can only delete their own files
+    if role != "admin" and file.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
+
+    # Delete the physical file from disk (encrypted or plain)
     try:
-        # file.filepath is a web path like /uploads/<filename>
-        # Resolve physical path by basename
         physical_path = _resolve_physical_video_path(file)
         if physical_path and physical_path.exists():
             physical_path.unlink()
     except Exception as e:
         print(f"Warning: Failed to delete physical file: {e}")
-    
-    # Delete database record
+
+    # Delete associated violation images (encrypted or plain)
+    violation_dir = UPLOAD_DIR / "violations" / file_id
+    if violation_dir.exists():
+        for f in violation_dir.iterdir():
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        try:
+            violation_dir.rmdir()
+        except Exception:
+            pass
+
+    # Delete the database record
     db.delete(file)
     db.commit()
     return None
@@ -194,7 +266,7 @@ def delete_file(file_id: str, db: Session = Depends(get_db)):
 
 
 def _load_violations_from_folder(video_id: str) -> list:
-    """Load violation records from DB."""
+    """Load violation records from the database."""
     db = SessionLocal()
     try:
         rows = (
@@ -220,7 +292,7 @@ def _load_violations_from_folder(video_id: str) -> list:
 
 
 def _has_cached_violations(video_id: str) -> bool:
-    """Return True when there are violation rows in DB for this video."""
+    """Return True if this video already has violation rows in the database."""
     db = SessionLocal()
     try:
         return (
@@ -239,7 +311,7 @@ def _has_cached_violations(video_id: str) -> bool:
 
 
 def _normalize_detections_for_ws_format(detections: list) -> list:
-    """Normalize detection payload to websocket-style bbox format."""
+    """Normalize detection data into websocket-style bounding box format."""
     normalized = []
 
     for det in detections or []:
@@ -258,7 +330,7 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
             })
             continue
 
-        # Convert xyxy format to websocket format.
+        # Convert xyxy format into websocket format.
         if all(k in det for k in ("x1", "y1", "x2", "y2")):
             x1 = float(det.get("x1", 0))
             y1 = float(det.get("y1", 0))
@@ -280,15 +352,31 @@ def _normalize_detections_for_ws_format(detections: list) -> list:
 @router.get("/{file_id}/detect-stream")
 def detect_file_stream(
     file_id: str,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None),
     sample_ms: int = Query(100, ge=50, le=1000),
     cooldown_ms: int = Query(500, ge=0, le=5000),
     save_image_ms: int = Query(2000, ge=200, le=10000),
     db: Session = Depends(get_db),
 ):
+    """Run detection on a video via SSE stream. Requires authentication.
+    Token can be passed via Authorization header OR ?token= query param (for SSE).
+    """
+    auth_token = authorization or (f"Bearer {token}" if token else None)
+    user_data = get_current_user_from_token(auth_token)
+    user_id = user_data.get("user_id")
+    role = user_data.get("role")
 
     file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    file_type = (file.type or "").strip().lower()
+    if file_type != "video":
+        raise HTTPException(status_code=400, detail="detect-stream supports video files only")
+
+    # Non-admin users can only scan their own files
+    if role != "admin" and file.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
 
     video_path = _resolve_physical_video_path(file)
 
@@ -328,8 +416,20 @@ def detect_file_stream(
     violation_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================
-    # REALTIME DETECTION
+    # REAL-TIME DETECTION
     # =========================
+
+    # Decrypt encrypted video to temp file if needed
+    temp_video_path: Optional[str] = None
+    is_encrypted = str(video_path).endswith(".enc")
+    if is_encrypted:
+        try:
+            temp_video_path = decrypt_file_to_temp(str(video_path), ENCRYPTION_KEY)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Video decryption failed: {e}")
+
+    effective_path = Path(temp_video_path) if temp_video_path else video_path
+
     def stream_detection():
 
         db_new = SessionLocal()
@@ -338,16 +438,15 @@ def detect_file_stream(
         if file_update:
             if not file_update.detection_id:
                 file_update.detection_id = file_id
-            file_update.status = "processing"
             db_new.add(file_update)
             db_new.commit()
 
-        frame_queue = queue.Queue(maxsize=30)
-        result_queue = queue.Queue(maxsize=30)
+        frame_queue = queue.Queue(maxsize=100)
+        result_queue = queue.Queue(maxsize=100)
 
         stop_event = threading.Event()
 
-        worker_count = 1   # náº¿u GPU â†’ 1, CPU â†’ 2-4
+        worker_count = 1   # If using GPU -> 1 worker, if CPU -> 2-4 workers
 
         violation_images = []
 
@@ -356,7 +455,7 @@ def detect_file_stream(
         # -----------------------
         def read_frames():
 
-            cap = cv2.VideoCapture(str(video_path))
+            cap = cv2.VideoCapture(str(effective_path))
 
             fps = cap.get(cv2.CAP_PROP_FPS) or 30
             frame_interval = max(1, int(fps * (sample_ms / 1000)))
@@ -436,7 +535,7 @@ def detect_file_stream(
         # -----------------------
         yield f"data: {json.dumps({'type':'init','detection_id':file_id})}\n\n"
 
-        cap_meta = cv2.VideoCapture(str(video_path))
+        cap_meta = cv2.VideoCapture(str(effective_path))
         fps = cap_meta.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap_meta.get(cv2.CAP_PROP_FRAME_COUNT))
         cap_meta.release()
@@ -446,9 +545,9 @@ def detect_file_stream(
         done_count = 0
         SAVE_COOLDOWN_SECONDS = cooldown_ms / 1000
         SAVE_IMAGE_SECONDS = save_image_ms / 1000
-        # Cooldown riÃªng theo tá»«ng label cho event violation (áº£nh lÆ°u).
+        # Separate cooldown for each label when saving violation events (saved images).
         last_saved_label_ms: dict = {}
-        # Cooldown toÃ n cá»¥c cho viá»‡c lÆ°u áº£nh thumbnail.
+        # Global cooldown for saving thumbnail images.
         last_saved_image_ms = -1.0
 
         # -----------------------
@@ -470,13 +569,13 @@ def detect_file_stream(
             frame = item["frame"]
             detections = item["detections"]
 
-            # 1) Emit detection liÃªn tá»¥c Ä‘á»ƒ FE váº½ bbox mÆ°á»£t.
+            # 1) Continuously emit detection events so the frontend can draw bounding boxes smoothly.
             yield f"data: {json.dumps({'type':'detection','data': {'frame_number': frame_number, 'timestamp': round(timestamp, 2), 'detections': detections}})}\n\n"
             if not detections:
                 continue
 
 
-            # 2) Chá»‰ chá»n label Ä‘á»§ cooldown Ä‘á»ƒ lÆ°u áº£nh violation.
+            # 2) Only keep labels that satisfy the cooldown condition before saving a violation image.
             eligible = [
                 d for d in detections
                 if (timestamp - last_saved_label_ms.get(d.get("label", ""), 0)) / 1000 >= SAVE_COOLDOWN_SECONDS
@@ -485,11 +584,11 @@ def detect_file_stream(
             if not eligible:
                 continue
 
-            # 3) Cháº·n táº§n suáº¥t lÆ°u áº£nh toÃ n cá»¥c.
+            # 3) Limit the overall frequency of saved images.
             if last_saved_image_ms >= 0 and (timestamp - last_saved_image_ms) / 1000 < SAVE_IMAGE_SECONDS:
                 continue
 
-            # Cáº­p nháº­t cooldown sau khi quyáº¿t Ä‘á»‹nh lÆ°u.
+            # Update cooldown trackers after deciding to save.
             for d in eligible:
                 last_saved_label_ms[d.get("label", "")] = timestamp
             last_saved_image_ms = float(timestamp)
@@ -498,12 +597,22 @@ def detect_file_stream(
             frame_filename = f"ts_{safe_ts}_f{frame_number}.jpg"
             frame_path = violation_dir / frame_filename
 
-            cv2.imwrite(str(frame_path), frame)
+            # Write frame to temp, encrypt, then delete temp
+            temp_frame = violation_dir / f"__temp_{frame_filename}"
+            cv2.imwrite(str(temp_frame), frame)
+            try:
+                encrypt_file(str(temp_frame), str(frame_path) + ".enc", ENCRYPTION_KEY)
+                temp_frame.unlink()
+            except Exception as e:
+                print(f"[FILES] Warning: Violation image encryption failed: {e}")
+                # Keep plaintext if encryption fails
+                pass
 
+            violation_filename = f"{frame_filename}.enc"
             violation = {
                 "frame_number": frame_number,
                 "timestamp": round(timestamp, 2),
-                "image_path": f"/uploads/violations/{file_id}/{frame_filename}",
+                "image_path": f"/uploads/violations/{file_id}/{violation_filename}",
                 "detections": eligible
             }
 
@@ -528,11 +637,17 @@ def detect_file_stream(
 
         file_update = db_new.query(VideoFile).filter(VideoFile.id == file_id).first()
         if file_update:
-            file_update.status = "completed"
             db_new.add(file_update)
             db_new.commit()
 
         db_new.close()
+
+        # Cleanup temp decrypted video
+        if temp_video_path and os.path.exists(temp_video_path):
+            try:
+                os.remove(temp_video_path)
+            except Exception:
+                pass
 
         yield f"data: {json.dumps({'type':'complete','total_violations':len(violation_images)})}\n\n"
 
@@ -546,17 +661,98 @@ def detect_file_stream(
         }
     )
 
-#  detect image
-@router.post("/detect-image")
-def detect_image(
-    file: UploadFile = File(...),
-    authorization: Optional[str] = Header(None)
+def _build_image_violation_payload(row: Violation) -> dict:
+    return {
+        "frame_number": row.frame_number,
+        "timestamp": row.timestamp,
+        "image_path": row.image_path,
+        "detections": row.detections or [],
+    }
+
+
+def _detect_and_cache_image_file(file: VideoFile, db: Session) -> tuple[list, dict, bool]:
+    cached = (
+        db.query(Violation)
+        .filter(Violation.video_id == file.id)
+        .order_by(Violation.created_at.asc())
+        .first()
+    )
+    if cached:
+        payload = _build_image_violation_payload(cached)
+        return payload["detections"], payload, True
+
+    physical_path = _resolve_physical_video_path(file)
+    if not physical_path or not physical_path.exists():
+        raise HTTPException(status_code=404, detail="Physical image file not found")
+
+    temp_path = None
+    detect_target = str(physical_path)
+    if str(physical_path).endswith(".enc"):
+        temp_path = decrypt_file_to_temp(str(physical_path), ENCRYPTION_KEY)
+        detect_target = temp_path
+
+    try:
+        detections = tasks.run_detection_on_image_temp(detect_target)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    violation_row = Violation(
+        video_id=file.id,
+        frame_number=1,
+        timestamp=0.0,
+        image_path=file.filepath,
+        detections=detections or [],
+    )
+    db.add(violation_row)
+    db.commit()
+    db.refresh(violation_row)
+    payload = _build_image_violation_payload(violation_row)
+    return payload["detections"], payload, False
+
+
+@router.get("/{file_id}/detect-image")
+def detect_saved_image(
+    file_id: str,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
 ):
-    """
-    Upload an image file and run detection on it.
-    Returns detection results.
-    """
-    # Get user from token (optional)
+    user_data = get_current_user_from_token(authorization)
+    user_id = user_data.get("user_id")
+    role = user_data.get("role")
+
+    file = db.query(VideoFile).filter(VideoFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    file_type = (file.type or "").strip().lower()
+    if file_type != "image":
+        raise HTTPException(status_code=400, detail="This API only supports image files")
+    if role != "admin" and file.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: you do not own this file")
+
+    detections, violation, cached = _detect_and_cache_image_file(file, db)
+    return {
+        "file_id": file.id,
+        "type": file.type,
+        "filename": file.filename,
+        "image_path": file.filepath,
+        "detections": detections,
+        "violation": violation,
+        "cached": cached,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# Detect objects in an uploaded image and persist it as type=image file.
+@router.post("/detect-image")
+async def detect_image(
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
     user_id = None
     try:
         if authorization:
@@ -564,32 +760,71 @@ def detect_image(
             user_id = user_data.get("user_id")
     except Exception as e:
         print(f"[FILES] Warning: Failed to get user from token: {e}")
-    
-    # Validate file type
-    if not file.content_type.startswith("image/"):
+
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only image files are allowed"
         )
-    
-    # Save uploaded image to a temp location
-    temp_dir = UPLOAD_DIR / "temp"
-    temp_dir.mkdir(exist_ok=True)
-    temp_image_path = temp_dir / f"{uuid4()}_{file.filename}"
-    
+
+    content = await file.read()
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File size exceeds {MAX_IMAGE_SIZE // (1024 * 1024)} MB limit"
+        )
+    await file.seek(0)
+
+    safe_filename = sanitize_filename(unquote(file.filename or "image.jpg"))
+    file_ext = Path(safe_filename).suffix or ".jpg"
+    image_id = uuid4().hex
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    actual_path = UPLOAD_DIR / f"{image_id}{file_ext}"
+    web_path = f"/uploads/{image_id}{file_ext}"
+
     try:
-        with temp_image_path.open("wb") as buffer:
+        with actual_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
-        # Run detection
-        results = tasks.run_detection_on_image_temp(str(temp_image_path))
-        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload image: {str(e)}"
+        )
+
+    encrypted_path = Path(str(actual_path) + ".enc")
+    try:
+        encrypt_file(str(actual_path), str(encrypted_path), ENCRYPTION_KEY)
+        actual_path.unlink()
+    except Exception as e:
+        print(f"[FILES] Warning: Image encryption failed: {e}")
+        encrypted_path = actual_path
+
+    db_file = VideoFile(
+        id=image_id,
+        type="image",
+        filename=safe_filename,
+        filepath=web_path,
+        user_id=user_id,
+        file_size=encrypted_path.stat().st_size,
+        duration=None,
+        detection_id=image_id,
+    )
+    db.add(db_file)
+    db.commit()
+    db.refresh(db_file)
+
+    try:
+        detections, violation, _ = _detect_and_cache_image_file(db_file, db)
         return {
-            "filename": file.filename,
-            "detections": results,
-            "path": f"/uploads/temp/{temp_image_path.name}",
+            "file_id": db_file.id,
+            "type": db_file.type,
+            "filename": db_file.filename,
+            "detections": detections,
+            "path": db_file.filepath,
+            "violation": violation,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "user_id": user_id
+            "user_id": user_id,
+            "cached": False,
         }
     except Exception as e:
         print(f"[FILES] Detection error: {e}")
@@ -599,11 +834,3 @@ def detect_image(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Detection failed: {str(e)}"
         )
-    finally:
-        # Clean up temp file
-        try:
-            if temp_image_path.exists():
-                temp_image_path.unlink()
-        except:
-            pass
-            

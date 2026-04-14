@@ -65,6 +65,124 @@ Backend (3soc) ← FastAPI, port 8000
 | `pymysql` | Driver kết nối MySQL |
 | `python-jose` | Tạo và xác thực JWT token |
 | `passlib[argon2]` | Mã hoá mật khẩu (Argon2) |
+| `cryptography` | AES-256-GCM mã hoá dữ liệu |
+
+---
+
+## Cơ chế bảo mật
+
+### 1. Giới hạn số lần thử (Rate Limiting)
+
+| Endpoint | Giới hạn | Ghi chú |
+|----------|----------|---------|
+| `/api/users/login` | 5 lần/phút theo IP | Chống brute-force mật khẩu |
+| `/api/users/register` | 3 lần/10 phút theo IP | Chống spam đăng ký |
+
+- Rate limiter dạng **sliding window**, an toàn đa luồng (thread-safe Lock)
+- Khi vượt giới hạn → HTTP 429 Too Many Requests
+- Hỗ trợ `X-Forwarded-For` header khi chạy sau reverse proxy
+
+### 2. Xác thực trên mọi endpoint
+
+| Endpoint | Mức truy cập |
+|----------|--------------|
+| `POST /api/files/upload`, `GET /api/files`, `DELETE /api/files/{id}` | Bắt buộc JWT (Bearer token) |
+| `GET /api/files/{id}/detect-stream` | JWT qua header hoặc `?token=` query param (cho SSE) |
+| `GET /api/files/{id}/detect-image`, `POST /api/files/detect-image` | Bắt buộc JWT |
+| `GET /api/users`, `PUT/DELETE /api/users/{id}` | JWT + vai trò **admin** |
+
+- User thường chỉ xem/xoá file của mình; admin thao tác mọi file
+- SSE không gửi được custom header → frontend gửi token qua `?token=` query param
+
+### 3. Mã hoá dữ liệu (AES-256-GCM)
+
+Tất cả dữ liệu nhạy cảm được mã hoá bằng **AES-256-GCM** (thư viện `cryptography`). Key duy nhất từ `ENCRYPTION_KEY` (base64, 32 bytes).
+
+#### 3.1. Email trong Database
+
+| Bước | Vị trí | Mô tả |
+|------|--------|-------|
+| **Khi đăng ký** | [`users.py:84`](app/routers/users.py#L84) | `email` → `_encrypt_email()` → base64 AES-256-GCM → lưu vào DB |
+| **Khi đọc** | [`users.py:25`](app/routers/users.py#L25) | `_decrypt_email()` → plaintext → trả về response |
+| **Fallback** | [`users.py:26-27`](app/routers/users.py#L26-L27) | Nếu decrypt lỗi (key sai), trả `decryption_failed_{id}@hidden.local` để tránh crash |
+
+```
+Plain email: "admin@example.com"
+    → encrypt_bytes() → nonce(12B) + ciphertext + tag(16B)
+    → base64.b64encode() → "l5Amq3QQ3m3KU0NoFhfvt2..."
+    → lưu vào DB
+```
+
+#### 3.2. Video trên Disk
+
+| Bước | Vị trí | Mô tả |
+|------|--------|-------|
+| **Upload** | [`files.py:109-117`](app/routers/files.py#L109-L117) | Lưu file → `encrypt_file()` → `video.mp4.enc` → xoá file gốc |
+| **Detect** | [`files.py:409-418`](app/routers/files.py#L409-L418) | `decrypt_file_to_temp()` → temp file → cv2 đọc → xoá temp sau khi xong |
+| **Fallback** | [`files.py:116-117`](app/routers/files.py#L116-L117) | Nếu mã hoá lỗi, giữ lại file gốc (degraded security, không fail hard) |
+
+```
+Upload video.mp4 (50MB)
+    → save to uploads/{video_id}.mp4
+    → encrypt_file() → uploads/{video_id}.mp4.enc
+    → unlink() xoá file gốc
+    → DB lưu filepath: /uploads/{video_id}.mp4 (web path)
+```
+
+#### 3.3. Ảnh vi phạm trên Disk
+
+| Bước | Vị trí | Mô tả |
+|------|--------|-------|
+| **Lưu** | [`files.py:588-599`](app/routers/files.py#L588-L599) | `cv2.imwrite()` → temp → `encrypt_file()` → `ts_xxxx.jpg.enc` → xoá temp |
+| **Serve** | Endpoint `/uploads/{path}` | Nếu file `.enc` → `decrypt_file_to_temp()` → serve plaintext → xoá temp |
+| **Fallback** | [`files.py:595-597`](app/routers/files.py#L595-L597) | Nếu mã hoá lỗi, giữ ảnh gốc (degraded security) |
+
+```
+Frame vi phạm tại t=1400ms, frame=42
+    → cv2.imwrite(__temp_ts_00001400.00_f42.jpg)
+    → encrypt_file() → ts_00001400.00_f42.jpg.enc
+    → unlink() xoá temp
+    → DB lưu image_path: /uploads/violations/{id}/ts_00001400.00_f42.jpg.enc
+```
+
+#### 3.4. Quản lý Key mã hoá
+
+| Vấn đề | Giải pháp |
+|--------|-----------|
+| **Key lưu ở đâu** | File `.env` → biến môi trường `ENCRYPTION_KEY` (base64 32-byte) |
+| **Nếu không có key** | [`config.py:13-21`](app/config.py#L13-L21) — App crash ngay khi khởi động với thông báo lỗi rõ ràng |
+| **Nếu mất key** | Toàn bộ email, video, ảnh vi phạm **không thể khôi phục** — backup key là bắt buộc |
+| **Không in ra log** | Không tự sinh key ngẫu nhiên — tránh lộ key trong log file |
+
+**Cách tạo key mới:**
+```bash
+python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
+```
+
+**Migrate email chưa mã hoá:**
+```bash
+cd 3soc
+.\venv\Scripts\activate
+python migrate_emails.py
+```
+
+### 4. Giới hạn kích thước upload
+
+| Loại | Giới hạn |
+|------|----------|
+| Video | 100 MB |
+| Ảnh | 10 MB |
+
+- Kiểm tra `Content-Type` header: video phải bắt đầu bằng `video/`, ảnh bằng `image/`
+
+### 5. Kiểm tra độ mạnh mật khẩu
+
+- Mật khẩu tối thiểu **6 ký tự** (validate qua Pydantic)
+- Hash bằng **Argon2** — thuật toán mạnh nhất hiện tại cho password hashing
+
+### 6. Bảo vệ SQL Injection
+
+- Dùng **SQLAlchemy ORM** — mọi query dùng parameterized binding, không拼接 string SQL
 
 ---
 
@@ -83,9 +201,12 @@ Tạo file `.env` ở thư mục gốc:
 ```env
 DATABASE_URL=mysql+pymysql://root:YOUR_PASSWORD@localhost/detect_3soc
 SECRET_KEY=your-secret-key-change-this-in-production
+ENCRYPTION_KEY=<base64 32-byte key>
 ```
 
 > Thay `YOUR_PASSWORD` bằng mật khẩu MySQL của bạn.
+> `ENCRYPTION_KEY` có thể tạo bằng lệnh Python: `python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"`.
+> Nếu bỏ trống, app sẽ tự sinh key và in ra log — **lưu vào `.env`** để tránh mất dữ liệu khi restart.
 
 ### Bước 3: Đặt file mô hình AI
 
@@ -120,7 +241,8 @@ Mở trình duyệt: **http://localhost:8000/docs**
 
 Nếu thấy giao diện Swagger UI → server đã chạy thành công ✅
 
-> **Lưu ý:** Bảng trong MySQL được tạo **tự động** khi server khởi động lần đầu, không cần chạy script SQL thủ công.
+> **Lưu ý:** Bảng trong MySQL được tạo **tự động** khi server khởi động lần đầu.  
+> Khi nâng cấp schema trên môi trường đang chạy, dùng file migration thủ công: `migrations/2026-04-13_add_type_drop_status_video_files.sql`.
 
 ---
 
@@ -188,17 +310,17 @@ ORM: **SQLAlchemy** — Python tự tạo bảng khi khởi động (`Base.metad
 
 ---
 
-### Bảng `video_files` — Lưu thông tin video đã upload
+### Bảng `video_files` — Lưu metadata file media đã upload
 
 | Cột | Kiểu dữ liệu | Mô tả |
 |-----|-------------|-------|
-| `id` | VARCHAR(64) (PK) | ID video (do Frontend tạo bằng `Date.now()`) |
+| `id` | VARCHAR(64) (PK) | ID file (video/image) |
 | `filename` | VARCHAR(255) | Tên file gốc (ví dụ: `video.mp4`) |
 | `filepath` | VARCHAR(500) | Đường dẫn web (ví dụ: `/uploads/1234567890.mp4`) |
 | `user_id` | INT (FK → users.id) | Người upload |
 | `file_size` | INT | Dung lượng file (bytes) |
-| `duration` | FLOAT | Thời lượng video (giây) |
-| `status` | VARCHAR(50) | Trạng thái: `uploaded` / `processing` / `completed` |
+| `duration` | FLOAT | Thời lượng video (giây), ảnh để `NULL` |
+| `type` | VARCHAR(16) | Loại file: `video` / `image` |
 | `detection_id` | VARCHAR(64) | Liên kết đến thư mục lưu ảnh vi phạm |
 | `created_at` | DATETIME | Thời gian upload |
 
@@ -206,7 +328,7 @@ ORM: **SQLAlchemy** — Python tự tạo bảng khi khởi động (`Base.metad
 
 ### Bảng `violations` — Lưu từng frame vi phạm phát hiện được
 
-Mỗi frame vi phạm được lưu thành **1 row** trong bảng này. Khi xoá video, toàn bộ violations liên quan tự động bị xoá theo (cascade).
+Mỗi frame vi phạm được lưu thành **1 row** trong bảng này. Khi xoá file media, toàn bộ violations liên quan tự động bị xoá theo (cascade).
 
 | Cột | Kiểu dữ liệu | Mô tả |
 |-----|-------------|-------|
@@ -274,9 +396,10 @@ users (1) ────────────── (N) video_files (1) ──�
 |--------|----------|---------------|-------|
 | POST | `/api/files/upload` | Có | Upload video (multipart/form-data) |
 | GET | `/api/files` | Có | Danh sách file (user thấy của mình, admin thấy tất cả) |
-| DELETE | `/api/files/{id}` | Có | Xoá file video + ảnh vi phạm + rows violations |
-| POST | `/api/files/detect-image` | Tuỳ chọn | Upload ảnh → detect ngay, trả kết quả (không lưu) |
-| GET | `/api/files/{id}/detect-stream` | Không | **SSE** — stream kết quả detect video |
+| DELETE | `/api/files/{id}` | Có | Xoá file media + ảnh vi phạm + rows violations |
+| POST | `/api/files/detect-image` | Có | Upload ảnh, lưu file `type=image`, detect và cache kết quả |
+| GET | `/api/files/{id}/detect-image` | Có | Detect ảnh đã lưu theo `file_id` (dùng ở màn quản lý file) |
+| GET | `/api/files/{id}/detect-stream` | Có | **SSE** — stream kết quả detect video (`type=video`) |
 
 ---
 
@@ -324,7 +447,7 @@ users (1) ────────────── (N) video_files (1) ──�
                - Yield SSE "violation":
                  { type:"violation", data:{ frame_number, timestamp, image_path, detections } }
 
-         Kết thúc: cập nhật status="completed"
+         Kết thúc:
            → Yield SSE "complete": { type:"complete", total_violations: N }
 ```
 
@@ -347,21 +470,20 @@ data: {"type": "complete",  "total_violations": 5}
 [Frontend] Chọn file ảnh → POST /api/files/detect-image
     │
     ▼
-[Backend] Lưu ảnh tạm vào uploads/temp/
+[Backend] Lưu ảnh vào uploads/ (mã hoá .enc)
+          → INSERT row vào video_files với type="image"
           → Chạy 3 model YOLO trên ảnh
-          → Xoá file tạm ngay sau khi xong
-          → Trả về kết quả:
-          {
-            "filename": "anh.jpg",
-            "detections": [ { "x":100, "y":200, "width":80, "height":60,
-                               "label": "co3soc", "confidence": 0.92 } ],
-            "timestamp": "2026-03-16T10:00:00Z"
-          }
+          → INSERT 1 row vào violations (frame_number=1, timestamp=0)
+          → Trả về kết quả detect + file_id
     │
     ▼
 [Frontend] Vẽ bounding box lên ảnh
 
-※ Ảnh detect đơn lẻ KHÔNG lưu vào DB, KHÔNG lưu disk — chỉ trả kết quả tức thì.
+[Frontend - Quản lý file] Bấm detect trên file type=image
+    │  GET /api/files/{id}/detect-image
+    ▼
+[Backend] Nếu đã có cache violations của ảnh → trả ngay
+          Nếu chưa có cache → detect rồi lưu cache
 ```
 
 ---
@@ -373,7 +495,7 @@ data: {"type": "complete",  "total_violations": 5}
     │
     ▼
 [Backend] Tìm user trong DB → kiểm tra mật khẩu (Argon2)
-          → Tạo JWT token (hết hạn sau 7 ngày)
+          → Tạo JWT token (hết hạn sau 1 ngày)
           → Trả về:
           {
             "access_token": "eyJ...",
@@ -388,13 +510,13 @@ data: {"type": "complete",  "total_violations": 5}
 
 ---
 
-### Luồng 4: Xoá video
+### Luồng 4: Xoá file media
 
 ```
 [Frontend] Bấm xoá → DELETE /api/files/{id}
     │
     ▼
-[Backend] Xoá file video vật lý trên disk (uploads/{id}.mp4)
+[Backend] Xoá file media vật lý trên disk (uploads/{id}.* hoặc .enc)
           → Xoá record trong bảng video_files
           → Bảng violations tự xoá toàn bộ rows liên quan (CASCADE)
           ※ Ảnh .jpg trong uploads/violations/{id}/ KHÔNG tự xoá —
@@ -409,7 +531,7 @@ data: {"type": "complete",  "total_violations": 5}
 |-------|--------|--------|
 | SSE detect-stream (lần đầu) | ✅ INSERT violations | ❌ không |
 | SSE detect-stream (cache hit) | ❌ không | ✅ SELECT violations |
-| Detect ảnh tĩnh | ❌ không | ❌ không |
+| Detect ảnh tĩnh | ✅ INSERT video_files + violations | ✅ SELECT violations (cache) |
 
 ---
 
@@ -445,7 +567,7 @@ t = 3100ms  →  phát hiện: [co3soc, vnmap]
 
 **Thuật toán:** JWT (JSON Web Token) — HS256
 **Mã hoá mật khẩu:** Argon2
-**Thời hạn token:** 7 ngày
+**Thời hạn token:** 1 ngày
 
 **JWT token chứa:**
 ```json
@@ -505,5 +627,7 @@ Khi server khởi động lần đầu, hệ thống tự tạo 2 tài khoản:
 - [ ] `GET /api/files/{id}/detect-stream` → SSE stream chạy, nhận được events `detection` và `violation`
 - [ ] Sau khi scan xong: DB có rows trong `violations`, ảnh `.jpg` xuất hiện trong `uploads/violations/{id}/`
 - [ ] Scan lại video đã scan → nhận ngay kết quả cache (không chạy AI lại)
-- [ ] Xoá video → rows trong `violations` tự biến mất (cascade)
-- [ ] `POST /api/files/detect-image` với file ảnh → nhận kết quả detect, không có gì lưu vào DB
+- [ ] Xoá file media → rows trong `violations` tự biến mất (cascade)
+- [ ] `POST /api/files/detect-image` với file ảnh → tạo row `type=image` trong `video_files`, có row trong `violations`
+- [ ] `GET /api/files/{id}/detect-image` trên file ảnh → trả kết quả cache/recalc thành công
+
