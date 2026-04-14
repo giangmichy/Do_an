@@ -1,14 +1,13 @@
 import React from "react"
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { TopBar } from '@/components/TopBar'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin", "vietnamese"] });
-const _geistMono = Geist_Mono({ subsets: ["latin", "vietnamese"] });
+const inter = Inter({ subsets: ["latin", "vietnamese"] });
 
 export const metadata: Metadata = {
   title: 'Detection Admin Dashboard',
@@ -41,7 +40,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`${_geist.className} antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
+      <body className={`${inter.className} antialiased bg-gradient-to-br from-gray-50 via-blue-50 to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950`}>
         <AuthProvider>
           <div className="flex flex-col min-h-screen">
             <TopBar />

@@ -10,6 +10,7 @@ import {User, Lock, Settings, LogOut, Users} from 'lucide-react';
 import {useRouter} from 'next/navigation';
 import {useToast} from '@/hooks/use-toast';
 import {escapeHtml} from '@/lib/escapeHtml';
+import ProtectedRoute from '@/components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -233,159 +234,161 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="min-h-screen bg-background p-6">
-            <div className="max-w-4xl mx-auto">
-                {/* Header */}
-                <div className="mb-8">
-                    <div className="flex items-center gap-3 mb-2">
-                        <Settings className="text-primary" size={32}/>
-                        <h1 className="text-3xl font-bold">Cài đặt</h1>
+        <ProtectedRoute>
+            <div className="min-h-screen bg-background p-6">
+                <div className="max-w-4xl mx-auto">
+                    {/* Header */}
+                    <div className="mb-8">
+                        <div className="flex items-center gap-3 mb-2">
+                            <Settings className="text-primary" size={32}/>
+                            <h1 className="text-3xl font-bold">Cài đặt</h1>
+                        </div>
+                        <p className="text-muted-foreground">Quản lý tài khoản và cài đặt hệ thống</p>
                     </div>
-                    <p className="text-muted-foreground">Quản lý tài khoản và cài đặt hệ thống</p>
+
+                    {/* Message Alert */}
+                    {message.text && (
+                        <Alert variant={message.type === 'error' ? 'destructive' : 'default'} className="mb-6">
+                            <AlertDescription>{message.text}</AlertDescription>
+                        </Alert>
+                    )}
+
+                    {/* Tabs */}
+                    <Tabs defaultValue="account" className="space-y-6">
+                        <TabsList className= 'grid w-full grid-cols-2'>
+                            <TabsTrigger value="account">Tài khoản</TabsTrigger>
+                            <TabsTrigger value="password">Mật khẩu</TabsTrigger>
+                        </TabsList>
+
+                        {/* Account Tab */}
+                        <TabsContent value="account">
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <User size={20}/>
+                                        Thông tin tài khoản
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-6">
+                                    {/* Username */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Tên đăng nhập</label>
+                                        <Input
+                                            value={user.username}
+                                            disabled
+                                            className="bg-muted"
+                                        />
+                                    </div>
+
+                                    {/* Email */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Email</label>
+                                        <Input
+                                            value={user.email}
+                                            disabled
+                                            className="bg-muted"
+                                        />
+                                    </div>
+
+                                    {/* Role */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Vai trò</label>
+                                        <Input
+                                            value={user?.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}
+                                            disabled
+                                            className="bg-muted"
+                                        />
+                                    </div>
+
+                                    {/* Created Date */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Ngày tạo tài khoản</label>
+                                        <Input
+                                            value={new Date(user?.createdAt).toLocaleDateString('vi-VN')}
+                                            disabled
+                                            className="bg-muted"
+                                        />
+                                    </div>
+
+                                    {/* Logout Button */}
+                                    <Button
+                                        onClick={handleLogout}
+                                        variant="destructive"
+                                        className="w-full flex items-center gap-2"
+                                    >
+                                        <LogOut size={16}/>
+                                        Đăng xuất
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+
+                        {/* Password Tab */}
+                        <TabsContent value="password">
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle className="flex items-center gap-2">
+                                        <Lock size={20}/>
+                                        Đổi mật khẩu
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-6">
+                                    {/* Old Password */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Mật khẩu hiện tại</label>
+                                        <Input
+                                            type="password"
+                                            placeholder="Nhập mật khẩu hiện tại"
+                                            value={passwordData.oldPassword}
+                                            onChange={(e) => setPasswordData({
+                                                ...passwordData,
+                                                oldPassword: e.target.value
+                                            })}
+                                        />
+                                    </div>
+
+                                    {/* New Password */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Mật khẩu mới</label>
+                                        <Input
+                                            type="password"
+                                            placeholder="Nhập mật khẩu mới"
+                                            value={passwordData.newPassword}
+                                            onChange={(e) => setPasswordData({
+                                                ...passwordData,
+                                                newPassword: e.target.value
+                                            })}
+                                        />
+                                    </div>
+
+                                    {/* Confirm Password */}
+                                    <div>
+                                        <label className="text-sm font-semibold mb-2 block">Xác nhận mật khẩu</label>
+                                        <Input
+                                            type="password"
+                                            placeholder="Nhập lại mật khẩu mới"
+                                            value={passwordData.confirmPassword}
+                                            onChange={(e) => setPasswordData({
+                                                ...passwordData,
+                                                confirmPassword: e.target.value
+                                            })}
+                                        />
+                                    </div>
+
+                                    {/* Save Button */}
+                                    <Button
+                                        onClick={handlePasswordChange}
+                                        disabled={loading}
+                                        className="w-full"
+                                    >
+                                        {loading ? 'Đang xử lý...' : 'Đổi mật khẩu'}
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+                    </Tabs>
                 </div>
-
-                {/* Message Alert */}
-                {message.text && (
-                    <Alert variant={message.type === 'error' ? 'destructive' : 'default'} className="mb-6">
-                        <AlertDescription>{message.text}</AlertDescription>
-                    </Alert>
-                )}
-
-                {/* Tabs */}
-                <Tabs defaultValue="account" className="space-y-6">
-                    <TabsList className= 'grid w-full grid-cols-2'>
-                        <TabsTrigger value="account">Tài khoản</TabsTrigger>
-                        <TabsTrigger value="password">Mật khẩu</TabsTrigger>
-                    </TabsList>
-
-                    {/* Account Tab */}
-                    <TabsContent value="account">
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    <User size={20}/>
-                                    Thông tin tài khoản
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-6">
-                                {/* Username */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Tên đăng nhập</label>
-                                    <Input
-                                        value={user.username}
-                                        disabled
-                                        className="bg-muted"
-                                    />
-                                </div>
-
-                                {/* Email */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Email</label>
-                                    <Input
-                                        value={user.email}
-                                        disabled
-                                        className="bg-muted"
-                                    />
-                                </div>
-
-                                {/* Role */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Vai trò</label>
-                                    <Input
-                                        value={user?.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}
-                                        disabled
-                                        className="bg-muted"
-                                    />
-                                </div>
-
-                                {/* Created Date */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Ngày tạo tài khoản</label>
-                                    <Input
-                                        value={new Date(user?.createdAt).toLocaleDateString('vi-VN')}
-                                        disabled
-                                        className="bg-muted"
-                                    />
-                                </div>
-
-                                {/* Logout Button */}
-                                <Button
-                                    onClick={handleLogout}
-                                    variant="destructive"
-                                    className="w-full flex items-center gap-2"
-                                >
-                                    <LogOut size={16}/>
-                                    Đăng xuất
-                                </Button>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
-
-                    {/* Password Tab */}
-                    <TabsContent value="password">
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2">
-                                    <Lock size={20}/>
-                                    Đổi mật khẩu
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-6">
-                                {/* Old Password */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Mật khẩu hiện tại</label>
-                                    <Input
-                                        type="password"
-                                        placeholder="Nhập mật khẩu hiện tại"
-                                        value={passwordData.oldPassword}
-                                        onChange={(e) => setPasswordData({
-                                            ...passwordData,
-                                            oldPassword: e.target.value
-                                        })}
-                                    />
-                                </div>
-
-                                {/* New Password */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Mật khẩu mới</label>
-                                    <Input
-                                        type="password"
-                                        placeholder="Nhập mật khẩu mới"
-                                        value={passwordData.newPassword}
-                                        onChange={(e) => setPasswordData({
-                                            ...passwordData,
-                                            newPassword: e.target.value
-                                        })}
-                                    />
-                                </div>
-
-                                {/* Confirm Password */}
-                                <div>
-                                    <label className="text-sm font-semibold mb-2 block">Xác nhận mật khẩu</label>
-                                    <Input
-                                        type="password"
-                                        placeholder="Nhập lại mật khẩu mới"
-                                        value={passwordData.confirmPassword}
-                                        onChange={(e) => setPasswordData({
-                                            ...passwordData,
-                                            confirmPassword: e.target.value
-                                        })}
-                                    />
-                                </div>
-
-                                {/* Save Button */}
-                                <Button
-                                    onClick={handlePasswordChange}
-                                    disabled={loading}
-                                    className="w-full"
-                                >
-                                    {loading ? 'Đang xử lý...' : 'Đổi mật khẩu'}
-                                </Button>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
-                </Tabs>
             </div>
-        </div>
+        </ProtectedRoute>
     );
 }

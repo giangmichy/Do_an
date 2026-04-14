@@ -18,6 +18,7 @@ import {
     PaginationPrevious
 } from '@/components/ui/pagination';
 import { useAuth } from '@/contexts/AuthContext';
+import ProtectedRoute from '@/components/ProtectedRoute';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -218,184 +219,186 @@ export default function FilesPage() {
     })();
 
     return (
-        <div className="min-h-screen bg-background p-6">
-            <div className="max-w-7xl mx-auto">
-                <div className="mb-8">
-                    <div className="flex items-center gap-3 mb-2">
-                        <FileVideo className="text-primary" size={32}/>
-                        <h1 className="text-3xl font-bold">Quản lý file</h1>
+        <ProtectedRoute>
+            <div className="min-h-screen bg-background p-6">
+                <div className="max-w-7xl mx-auto">
+                    <div className="mb-8">
+                        <div className="flex items-center gap-3 mb-2">
+                            <FileVideo className="text-primary" size={32}/>
+                            <h1 className="text-3xl font-bold">Quản lý file</h1>
+                        </div>
+                        <p className="text-muted-foreground">Danh sách file đã tải lên</p>
                     </div>
-                    <p className="text-muted-foreground">Danh sách file đã tải lên</p>
-                </div>
 
-                {error && (
-                    <Alert variant="destructive" className="mb-4">
-                        <AlertDescription>{error}</AlertDescription>
-                    </Alert>
-                )}
+                    {error && (
+                        <Alert variant="destructive" className="mb-4">
+                            <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                    )}
 
-                <Card>
-                    <CardContent>
-                        {loading ? (
-                            <div className="text-center py-8 text-muted-foreground">Loading...</div>
-                        ) : files.length === 0 ? (
-                            <div className="text-center py-8 text-muted-foreground">No files found</div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full">
-                                    <thead>
-                                    <tr className="border-b">
-                                        <th className="text-left p-4">STT</th>
-                                        <th className="text-left p-4">Tên</th>
-                                        <th className="text-left p-4">Kích thước</th>
-                                        <th className="text-left p-4">Thời gian</th>
-                                        <th className="text-left p-4">Người tạo</th>
-                                        <th className="text-left p-4">Thời gian tạo</th>
-                                        <th className="text-right p-4">Thao tác</th>
-                                    </tr>
-                                    </thead>
-                                    <tbody>
-                                    {files.map((file, index) => (
-                                        <tr key={file.id} className="border-b hover:bg-muted/50">
-                                            <td className="p-4">{(page - 1) * pageSize + index + 1}</td>
-                                            <td className="p-4">
-                                                <div className="flex items-center gap-2">
-                                                    {file.type === 'image' ? (
-                                                        <ImageIcon size={16} className="text-muted-foreground"/>
-                                                    ) : (
-                                                        <FileVideo size={16} className="text-muted-foreground"/>
-                                                    )}
-                                                    <span className="font-medium">{escapeHtml(file.filename)}</span>
-                                                </div>
-                                            </td>
-                                            <td className="p-4 text-sm text-muted-foreground">{formatFileSize(file.file_size)}</td>
-                                            <td className="p-4 text-sm text-muted-foreground">{formatDuration(file.duration)}</td>
-                                            <td className="p-4 text-sm font-medium">
-                                                {file.owner ? escapeHtml(file.owner.username) : 'N/A'}
-                                            </td>
-                                            <td className="p-4 text-sm text-muted-foreground">{formatDate(file.created_at)}</td>
-                                            <td className="p-4">
-                                                <div className="flex gap-2 justify-end">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() => window.open(file.filepath, '_blank')}
-                                                    >
-                                                        <Eye size={14}/>
-                                                    </Button>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() => handleDetect(file)}
-                                                        disabled={detecting}
-                                                    >
-                                                        <Scan size={14}/>
-                                                    </Button>
-                                                   {isAdmin && (
-                                                    <Button size="sm" variant="destructive"
-                                                            onClick={() => handleDelete(file.id, file.filename)}>
-                                                        <Trash2 size={14}/>
-                                                    </Button>)}
-                                                </div>
-                                            </td>
+                    <Card>
+                        <CardContent>
+                            {loading ? (
+                                <div className="text-center py-8 text-muted-foreground">Loading...</div>
+                            ) : files.length === 0 ? (
+                                <div className="text-center py-8 text-muted-foreground">No files found</div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full">
+                                        <thead>
+                                        <tr className="border-b">
+                                            <th className="text-left p-4">STT</th>
+                                            <th className="text-left p-4">Tên</th>
+                                            <th className="text-left p-4">Kích thước</th>
+                                            <th className="text-left p-4">Thời gian</th>
+                                            <th className="text-left p-4">Người tạo</th>
+                                            <th className="text-left p-4">Thời gian tạo</th>
+                                            <th className="text-right p-4">Thao tác</th>
                                         </tr>
-                                    ))}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody>
+                                        {files.map((file, index) => (
+                                            <tr key={file.id} className="border-b hover:bg-muted/50">
+                                                <td className="p-4">{(page - 1) * pageSize + index + 1}</td>
+                                                <td className="p-4">
+                                                    <div className="flex items-center gap-2">
+                                                        {file.type === 'image' ? (
+                                                            <ImageIcon size={16} className="text-muted-foreground"/>
+                                                        ) : (
+                                                            <FileVideo size={16} className="text-muted-foreground"/>
+                                                        )}
+                                                        <span className="font-medium">{escapeHtml(file.filename)}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="p-4 text-sm text-muted-foreground">{formatFileSize(file.file_size)}</td>
+                                                <td className="p-4 text-sm text-muted-foreground">{formatDuration(file.duration)}</td>
+                                                <td className="p-4 text-sm font-medium">
+                                                    {file.owner ? escapeHtml(file.owner.username) : 'N/A'}
+                                                </td>
+                                                <td className="p-4 text-sm text-muted-foreground">{formatDate(file.created_at)}</td>
+                                                <td className="p-4">
+                                                    <div className="flex gap-2 justify-end">
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => window.open(file.filepath, '_blank')}
+                                                        >
+                                                            <Eye size={14}/>
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => handleDetect(file)}
+                                                            disabled={detecting}
+                                                        >
+                                                            <Scan size={14}/>
+                                                        </Button>
+                                                       {isAdmin && (
+                                                        <Button size="sm" variant="destructive"
+                                                                onClick={() => handleDelete(file.id, file.filename)}>
+                                                            <Trash2 size={14}/>
+                                                        </Button>)}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        </tbody>
+                                    </table>
 
-                                <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                                        <p className="text-sm text-muted-foreground">
-                                            Tổng {totalFiles} file
-                                        </p>
-                                        <select
-                                            value={sortOrder}
-                                            onChange={(e) => {
-                                                setSortOrder(e.target.value as SortOrder);
-                                                setPage(1);
-                                            }}
-                                            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                                        >
-                                            <option value="desc">Mới nhất</option>
-                                            <option value="asc">Cũ nhất</option>
-                                        </select>
-                                    </div>
+                                    <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                                            <p className="text-sm text-muted-foreground">
+                                                Tổng {totalFiles} file
+                                            </p>
+                                            <select
+                                                value={sortOrder}
+                                                onChange={(e) => {
+                                                    setSortOrder(e.target.value as SortOrder);
+                                                    setPage(1);
+                                                }}
+                                                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                                            >
+                                                <option value="desc">Mới nhất</option>
+                                                <option value="asc">Cũ nhất</option>
+                                            </select>
+                                        </div>
 
-                                    <Pagination className="mx-0 w-auto justify-end">
-                                        <PaginationContent>
-                                            <PaginationItem>
-                                                <PaginationPrevious
-                                                    href="#"
-                                                    onClick={(e) => {
-                                                        e.preventDefault();
-                                                        if (page > 1) {
-                                                            setPage(page - 1);
-                                                        }
-                                                    }}
-                                                    className={page <= 1 ? 'pointer-events-none opacity-50' : ''}
-                                                />
-                                            </PaginationItem>
-
-                                            {visiblePages.map((pageNum) => (
-                                                <PaginationItem key={pageNum}>
-                                                    <PaginationLink
+                                        <Pagination className="mx-0 w-auto justify-end">
+                                            <PaginationContent>
+                                                <PaginationItem>
+                                                    <PaginationPrevious
                                                         href="#"
-                                                        isActive={pageNum === page}
                                                         onClick={(e) => {
                                                             e.preventDefault();
-                                                            setPage(pageNum);
+                                                            if (page > 1) {
+                                                                setPage(page - 1);
+                                                            }
                                                         }}
-                                                    >
-                                                        {pageNum}
-                                                    </PaginationLink>
+                                                        className={page <= 1 ? 'pointer-events-none opacity-50' : ''}
+                                                    />
                                                 </PaginationItem>
-                                            ))}
 
-                                            <PaginationItem>
-                                                <PaginationNext
-                                                    href="#"
-                                                    onClick={(e) => {
-                                                        e.preventDefault();
-                                                        if (page < totalPages) {
-                                                            setPage(page + 1);
-                                                        }
-                                                    }}
-                                                    className={page >= totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''}
-                                                />
-                                            </PaginationItem>
-                                        </PaginationContent>
-                                    </Pagination>
+                                                {visiblePages.map((pageNum) => (
+                                                    <PaginationItem key={pageNum}>
+                                                        <PaginationLink
+                                                            href="#"
+                                                            isActive={pageNum === page}
+                                                            onClick={(e) => {
+                                                                e.preventDefault();
+                                                                setPage(pageNum);
+                                                            }}
+                                                        >
+                                                            {pageNum}
+                                                        </PaginationLink>
+                                                    </PaginationItem>
+                                                ))}
+
+                                                <PaginationItem>
+                                                    <PaginationNext
+                                                        href="#"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            if (page < totalPages) {
+                                                                setPage(page + 1);
+                                                            }
+                                                        }}
+                                                        className={page >= totalPages || totalPages === 0 ? 'pointer-events-none opacity-50' : ''}
+                                                    />
+                                                </PaginationItem>
+                                            </PaginationContent>
+                                        </Pagination>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
+
+                <DetectionModal
+                    open={resultModalOpen}
+                    onOpenChange={setResultModalOpen}
+                    data={detectionResult}
+                    fileName={currentFileName}
+                />
+
+                <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Xác nhận xóa tệp</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                Bạn có chắc chắn muốn xóa tệp <span className="font-semibold">{fileToDelete?.filename}</span>? Hành động này không thể hoàn tác.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Hủy</AlertDialogCancel>
+                            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
+                                Xóa
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </div>
-
-            <DetectionModal
-                open={resultModalOpen}
-                onOpenChange={setResultModalOpen}
-                data={detectionResult}
-                fileName={currentFileName}
-            />
-
-            <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Xác nhận xóa tệp</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            Bạn có chắc chắn muốn xóa tệp <span className="font-semibold">{fileToDelete?.filename}</span>? Hành động này không thể hoàn tác.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Hủy</AlertDialogCancel>
-                        <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
-                            Xóa
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-        </div>
+        </ProtectedRoute>
     );
 }
 
